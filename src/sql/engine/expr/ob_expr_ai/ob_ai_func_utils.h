@@ -236,6 +236,17 @@ public:
   ObAIFuncJsonUtils() {}
   virtual ~ObAIFuncJsonUtils() {}
   static bool ob_is_json_array_all_str(ObJsonArray* json_array);
+  // Extract the "index" field of an embedding item and check it is within
+  // [0, expect_count). Returns OB_ENTRY_NOT_EXIST when the item does not
+  // carry an index at all, and OB_INVALID_DATA when the index is present
+  // but malformed or out of range.
+  static int get_embed_item_index(ObIJsonBase *item, int64_t expect_count, int64_t &index);
+  // Check that every element of an embedding array is a JSON number.
+  static int check_embed_elements_are_numbers(ObIJsonBase *embedding);
+  // Build the mapping from the request order to the position of the item
+  // inside the response array. The provider may return the items in any
+  // order, the optional "index" field of an item defines its position.
+  static int build_embed_index_map(ObJsonArray *data_array, ObArray<int64_t> &index_map);
   static int transform_array_to_json_array(ObIAllocator &allocator, ObArray<ObString> &contents, ObJsonArray *&array);
   static int get_json_object(ObIAllocator &allocator, ObJsonObject *&obj_node);
   static int get_json_array(ObIAllocator &allocator, ObJsonArray *&array_node);

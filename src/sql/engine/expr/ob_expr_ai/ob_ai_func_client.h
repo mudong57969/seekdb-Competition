@@ -57,6 +57,7 @@ private:
   static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp);
   bool is_retryable_status_code(int64_t http_code);
   bool is_timeout();
+  bool is_timeout_after_delay(int64_t delay_ms);
 private:
   static const int64_t CURL_MAX_TIMEOUT_SEC;
   common::ObIAllocator *allocator_;

@@ -229,20 +229,33 @@ int ObOpenAIUtils::ObOpenAIEmbed::parse_output(common::ObIAllocator &allocator,
     if (OB_FAIL(ObAIFuncJsonUtils::get_json_array(allocator, result_array))) {
     } else if (OB_ISNULL(data_node = http_response->get_value("data"))) {
       ret = OB_INVALID_DATA;
+    } else if (data_node->json_type() != ObJsonNodeType::J_ARRAY) {
+      ret = OB_INVALID_DATA;
     } else {
       ObJsonArray *data_array = static_cast<ObJsonArray *>(data_node);
-      ObJsonNode *embedding_node = nullptr;
-      for (int64_t i = 0; OB_SUCC(ret) && i < data_array->element_count(); i++) {
-        if (OB_ISNULL(embedding_node = data_array->get_value(i))) {
-          ret = OB_INVALID_DATA;
-        } else if (embedding_node->json_type() != ObJsonNodeType::J_OBJECT) {
-          ret = OB_INVALID_DATA;
-        } else {
-          ObJsonObject *embedding_obj = static_cast<ObJsonObject *>(embedding_node);
-          ObJsonNode *embedding = embedding_obj->get_value("embedding");
-          if (OB_ISNULL(embedding)) {
+      int64_t count = data_array->element_count();
+      // The provider is allowed to return the items in any order, so the
+      // optional "index" field of each item is used to restore the order of
+      // the request. Items without an index keep their relative order.
+      ObArray<int64_t> index_map;
+      if (OB_FAIL(index_map.prepare_allocate(count))) {
+      } else if (OB_FAIL(ObAIFuncJsonUtils::build_embed_index_map(data_array, index_map))) {
+        ret = OB_ERR_UNEXPECTED;
+        LOG_USER_ERROR(OB_ERR_UNEXPECTED, "ai_embed, result contains an invalid or duplicated index");
+      } else {
+        for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+          ObJsonNode *embedding_node = data_array->get_value(index_map[i]);
+          if (OB_ISNULL(embedding_node)) {
             ret = OB_INVALID_DATA;
-          } else if (OB_FAIL(result_array->append(embedding))) {
+          } else if (embedding_node->json_type() != ObJsonNodeType::J_OBJECT) {
+            ret = OB_INVALID_DATA;
+          } else {
+            ObJsonObject *embedding_obj = static_cast<ObJsonObject *>(embedding_node);
+            ObJsonNode *embedding = embedding_obj->get_value("embedding");
+            if (OB_ISNULL(embedding)) {
+              ret = OB_INVALID_DATA;
+            } else if (OB_FAIL(result_array->append(embedding))) {
+            }
           }
         }
       }
@@ -1469,15 +1482,23 @@ int ObAIFuncModel::call_dense_embedding_vector_v2(ObArray<ObString> &content, Ob
     ObJsonArray *result_array = static_cast<ObJsonArray *>(result_base);
     int64_t count = result_array->element_count();
     if (content.count() != count) {
-      ret = OB_ERR_UNEXPECTED;
+      ret = OB_INVALID_ARGUMENT;
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, result count does not match the request count");
     } else {
       for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
         ObIJsonBase *j_base = result_array->get_value(i);
         if (OB_ISNULL(j_base)) {
-          ret = OB_ERR_UNEXPECTED;
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, result embedding is missing");
+        } else if (j_base->json_type() != ObJsonNodeType::J_ARRAY) {
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, result embedding is not an array");
         } else if (dimension > 0 && static_cast<ObJsonArray *>(j_base)->element_count() != dimension) {
           ret = OB_INVALID_ARGUMENT;
           LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, result dimension is not equal to dimension");
+        } else if (OB_FAIL(ObAIFuncJsonUtils::check_embed_elements_are_numbers(j_base))) {
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, result embedding contains a non numeric element");
         } else if (OB_FAIL(ObAIFuncJsonUtils::print_json_to_str(*allocator_, j_base, result_str))) {
         } else {
           results.push_back(result_str);
@@ -1487,7 +1508,8 @@ int ObAIFuncModel::call_dense_embedding_vector_v2(ObArray<ObString> &content, Ob
   }
   if (ret == OB_INVALID_DATA) {
     ObString response_str;
-    if (OB_SUCCESS == ObAIFuncJsonUtils::print_json_to_str(*allocator_, response, response_str)) {
+    if (OB_NOT_NULL(response) &&
+        OB_SUCCESS == ObAIFuncJsonUtils::print_json_to_str(*allocator_, response, response_str)) {
       char http_message_str[1024];
       snprintf(http_message_str, sizeof(http_message_str), "unexpected http message: %s", response_str.ptr());
       ObString ob_http_message_str(http_message_str);
@@ -1552,6 +1574,129 @@ bool ObAIFuncJsonUtils::ob_is_json_array_all_str(ObJsonArray* json_array)
     }
   }
   return is_all_str;
+}
+
+int ObAIFuncJsonUtils::get_embed_item_index(ObIJsonBase *item, int64_t expect_count, int64_t &index)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(item) || item->json_type() != ObJsonNodeType::J_OBJECT) {
+    ret = OB_INVALID_DATA;
+  } else {
+    ObJsonObject *item_obj = static_cast<ObJsonObject *>(item);
+    ObJsonNode *index_node = item_obj->get_value("index");
+    if (OB_ISNULL(index_node)) {
+      // The item does not carry an index at all.
+      ret = OB_ENTRY_NOT_EXIST;
+    } else if (index_node->json_type() != ObJsonNodeType::J_INT
+               && index_node->json_type() != ObJsonNodeType::J_UINT) {
+      ret = OB_INVALID_DATA;
+    } else {
+      int64_t raw_index = (index_node->json_type() == ObJsonNodeType::J_INT)
+                          ? static_cast<ObJsonInt *>(index_node)->value()
+                          : static_cast<ObJsonUint *>(index_node)->value();
+      if (raw_index < 0 || raw_index >= expect_count) {
+        ret = OB_INVALID_DATA;
+      } else {
+        index = raw_index;
+      }
+    }
+  }
+  return ret;
+}
+
+int ObAIFuncJsonUtils::check_embed_elements_are_numbers(ObIJsonBase *embedding)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(embedding) || embedding->json_type() != ObJsonNodeType::J_ARRAY) {
+    ret = OB_INVALID_DATA;
+  } else {
+    ObJsonArray *embedding_array = static_cast<ObJsonArray *>(embedding);
+    for (int64_t i = 0; OB_SUCC(ret) && i < embedding_array->element_count(); i++) {
+      ObJsonNode *element = embedding_array->get_value(i);
+      if (OB_ISNULL(element) || !share::ObJsonHelper::is_number_type(element)) {
+        ret = OB_INVALID_DATA;
+      }
+    }
+  }
+  return ret;
+}
+
+int ObAIFuncJsonUtils::build_embed_index_map(ObJsonArray *data_array, ObArray<int64_t> &index_map)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(data_array)) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    int64_t count = data_array->element_count();
+    // Collect the index of every item. Items carrying an explicit index
+    // define their own position, the remaining ones keep their relative order.
+    ObArray<int64_t> explicit_index;
+    if (OB_FAIL(explicit_index.prepare_allocate(count))) {
+    } else {
+      bool has_explicit_index = false;
+      for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+        ObJsonNode *item = data_array->get_value(i);
+        int64_t item_index = -1;
+        int tmp_ret = get_embed_item_index(item, count, item_index);
+        if (tmp_ret == OB_ENTRY_NOT_EXIST) {
+          // The item does not carry an index, it keeps its position.
+          item_index = -1;
+        } else if (OB_FAIL(tmp_ret)) {
+          ret = tmp_ret;
+        } else {
+          has_explicit_index = true;
+        }
+        explicit_index[i] = item_index;
+      }
+      if (OB_SUCC(ret) && has_explicit_index) {
+        // Reject duplicated indexes, they would silently drop an input.
+        for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+          if (explicit_index[i] < 0) {
+            continue;
+          }
+          for (int64_t j = i + 1; OB_SUCC(ret) && j < count; j++) {
+            if (explicit_index[j] == explicit_index[i]) {
+              ret = OB_INVALID_DATA;
+            }
+          }
+        }
+      }
+      if (OB_SUCC(ret)) {
+        // Place the items into their final position.
+        ObArray<int64_t> slot_taken;
+        if (OB_FAIL(slot_taken.prepare_allocate(count))) {
+        } else {
+          for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+            slot_taken[i] = 0;
+          }
+          for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+            if (explicit_index[i] >= 0) {
+              slot_taken[explicit_index[i]] = 1;
+            }
+          }
+          int64_t next_slot = 0;
+          for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+            int64_t slot = explicit_index[i];
+            if (slot < 0) {
+              // Take the first free slot, keeping the relative order.
+              while (next_slot < count && slot_taken[next_slot] == 1) {
+                ++next_slot;
+              }
+              if (next_slot >= count) {
+                ret = OB_INVALID_DATA;
+                break;
+              }
+              slot = next_slot;
+              slot_taken[slot] = 1;
+            }
+            if (OB_FAIL(index_map.push_back(slot))) {
+            }
+          }
+        }
+      }
+    }
+  }
+  return ret;
 }
 
 int ObAIFuncPromptObjectUtils::construct_prompt_object(ObIAllocator &allocator, ObString &template_str, ObJsonArray *args_array, ObJsonObject *&prompt_object)

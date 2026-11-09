@@ -46,7 +46,6 @@ int ObExprAIEmbed::calc_result_typeN(ObExprResType &type,
                                      common::ObExprTypeCtx &type_ctx) const 
 {
   UNUSED(type_ctx);
-  UNUSED(types_stack);
   int ret = OB_SUCCESS;
   if (OB_UNLIKELY(param_num > 3 || param_num < 2)) {
     ObString func_name_(get_name());
@@ -55,21 +54,38 @@ int ObExprAIEmbed::calc_result_typeN(ObExprResType &type,
   } else {
     types_stack[MODEL_IDX].set_calc_type(ObVarcharType);
     types_stack[MODEL_IDX].set_calc_collation_type(CS_TYPE_UTF8MB4_BIN);
-    types_stack[CONTENT_IDX].set_calc_type(ObVarcharType);
-    types_stack[CONTENT_IDX].set_calc_collation_type(CS_TYPE_UTF8MB4_BIN);
-    if (param_num == 3) {
-      if (ob_is_integer_type(types_stack[DIM_IDX].get_type())) {
+    // The content argument accepts ordinary strings and LOB string types.
+    // TEXT/LONGTEXT inputs keep their LOB type so that long contents are
+    // not truncated, and are read as real string data at runtime.
+    // A null literal is accepted as well, it produces a null result.
+    if (!ob_is_string_or_lob_type(types_stack[CONTENT_IDX].get_type())
+        && types_stack[CONTENT_IDX].get_type() != ObNullType) {
+      ret = OB_INVALID_ARGUMENT;
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, content must be a string or lob type");
+    } else {
+      if (!ob_is_text_tc(types_stack[CONTENT_IDX].get_type())
+          && types_stack[CONTENT_IDX].get_type() != ObNullType) {
+        types_stack[CONTENT_IDX].set_calc_type(ObVarcharType);
+      }
+      types_stack[CONTENT_IDX].set_calc_collation_type(CS_TYPE_UTF8MB4_BIN);
+    }
+    if (OB_SUCC(ret) && param_num == 3) {
+      // The dimension argument must be an integer. Non integer types are
+      // rejected here, while the value range is checked at runtime.
+      if (!ob_is_integer_type(types_stack[DIM_IDX].get_type())) {
+        ret = OB_INVALID_ARGUMENT;
+        LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, dimension parameter must be an integer");
+      } else {
         types_stack[DIM_IDX].set_calc_type(ObIntType);
         types_stack[DIM_IDX].set_precision(10);
         types_stack[DIM_IDX].set_scale(0);
-      } else {
-        ret = OB_INVALID_ARGUMENT;
-        LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, dimension parameter must be an integer, not a decimal or float");
       }
     }
-    type.set_varchar();
-    type.set_collation_type(CS_TYPE_UTF8MB4_BIN);
-    type.set_collation_level(CS_LEVEL_COERCIBLE);
+    if (OB_SUCC(ret)) {
+      type.set_varchar();
+      type.set_collation_type(CS_TYPE_UTF8MB4_BIN);
+      type.set_collation_level(CS_LEVEL_COERCIBLE);
+    }
   }
   return ret;
 }
@@ -82,9 +98,13 @@ int ObExprAIEmbed::eval_ai_embed(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &re
   ObDatum *arg_dim = nullptr;
   if (expr.arg_cnt_ == 3 ? OB_FAIL(expr.eval_param_value(ctx, arg_model_id, arg_content, arg_dim))
                          : OB_FAIL(expr.eval_param_value(ctx, arg_model_id, arg_content))) {
-  } else if (arg_model_id->is_null() || arg_content->is_null()) {
+  } else if (arg_model_id->is_null()) {
     ret = OB_INVALID_ARGUMENT;
-    LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, model id or content is null");
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, model id is null");
+    res.set_null();
+  } else if (arg_content->is_null()) {
+    // A null content produces a null result instead of an error, so that
+    // null rows do not break multi row queries.
     res.set_null();
   } else {
     ObEvalCtx::TempAllocGuard tmp_alloc_g(ctx);
@@ -98,7 +118,17 @@ int ObExprAIEmbed::eval_ai_embed(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &re
         ::oceanbase::share::server_service<::oceanbase::query::ObIAiEndpointResolver>();
     ObString model_id = arg_model_id->get_string();
     ObString content = arg_content->get_string();
-    if (model_id.empty() || content.empty()) {
+    if (ob_is_text_tc(expr.args_[CONTENT_IDX]->datum_meta_.type_)) {
+      // LOB contents must be read as real string data, otherwise only the
+      // locator would be sent to the model service.
+      if (OB_FAIL(ObTextStringHelper::read_real_string_data(
+                   ctx.exec_ctx_, temp_allocator, *arg_content,
+                   expr.args_[CONTENT_IDX]->datum_meta_,
+                   expr.args_[CONTENT_IDX]->obj_meta_.has_lob_header(),
+                   content))) {
+      }
+    }
+    if (OB_SUCC(ret) && (model_id.empty() || content.empty())) {
       ret = OB_INVALID_ARGUMENT;
       LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, model id or input is empty");
       res.set_null();
@@ -108,14 +138,20 @@ int ObExprAIEmbed::eval_ai_embed(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &re
     ObJsonObject *config = nullptr;
     if (OB_FAIL(ret)) {
     } else if (OB_NOT_NULL(arg_dim)) {
-      dim = arg_dim->get_int();
-      if (dim <= 0) {
+      if (arg_dim->is_null()) {
         ret = OB_INVALID_ARGUMENT;
-        LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, dimension parameter must be a positive integer");
+        LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, dimension parameter is null");
         res.set_null();
-      } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_object(temp_allocator, config))) {
-      } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_int(temp_allocator, dim, dim_json))) {
-      } else if (OB_FAIL(config->add("dimensions", dim_json))) {
+      } else {
+        dim = arg_dim->get_int();
+        if (dim <= 0) {
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, dimension parameter must be a positive integer");
+          res.set_null();
+        } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_object(temp_allocator, config))) {
+        } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_int(temp_allocator, dim, dim_json))) {
+        } else if (OB_FAIL(config->add("dimensions", dim_json))) {
+        }
       }
     }
     if (OB_FAIL(ret)) {

@@ -161,6 +161,11 @@ int ObAIFuncClient::send_post(ObJsonObject *data, ObJsonObject *&response)
       } else {
         LOG_WARN("retryable http status code", K(http_code), K(i));
         int64_t delay_ms = 1000 * (1 << i) + rand() % 1000;
+        // Do not sleep past the deadline, otherwise the caller would only
+        // see a timeout instead of the real http error.
+        if (is_timeout_after_delay(delay_ms)) {
+          break;
+        }
         ob_usleep(delay_ms * 1000);
         response_buf.reset();
       }
@@ -475,6 +480,11 @@ bool ObAIFuncClient::is_retryable_status_code(int64_t http_code)
 bool ObAIFuncClient::is_timeout()
 {
   return ObTimeUtility::current_time() > abs_timeout_ts_;
+}
+
+bool ObAIFuncClient::is_timeout_after_delay(int64_t delay_ms)
+{
+  return ObTimeUtility::current_time() + delay_ms * 1000 >= abs_timeout_ts_;
 }
 
 } // namespace common
