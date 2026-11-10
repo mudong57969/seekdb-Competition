@@ -1,0 +1,7 @@
+**
+!minivectordb/
+!minivectordb/Cargo.toml
+!minivectordb/Cargo.lock
+!minivectordb/src/
+!minivectordb/src/*.rs
+minivectordb/target/
