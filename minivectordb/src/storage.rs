@@ -237,6 +237,28 @@ impl Table {
         }))
     }
 
+    pub fn scan_where<'a>(
+        &self,
+        mut include: impl FnMut(&[u8]) -> Result<bool, Error> + 'a,
+    ) -> Result<impl Iterator<Item = Result<Row, Error>> + 'a, Error> {
+        let mut reader = BufReader::with_capacity(BUFFER, File::open(&self.path)?);
+        let mut line = Vec::new();
+        reader.read_until(b'\n', &mut line)?;
+        Ok(std::iter::from_fn(move || loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => return None,
+                Err(error) => return Some(Err(error.into())),
+                Ok(_) => {}
+            }
+            match include(&line) {
+                Ok(false) => continue,
+                Ok(true) => return Some(decode_record(&line)),
+                Err(error) => return Some(Err(error)),
+            }
+        }))
+    }
+
     pub fn key(&self, row: &Row) -> Result<i64, Error> {
         match row.get(self.schema.primary) {
             Some(Cell::BigInt(key)) => Ok(*key),
@@ -253,7 +275,11 @@ fn read_record<T: DeserializeOwned>(
     if reader.read_until(b'\n', line)? == 0 {
         return Ok(None);
     }
-    serde_json::from_slice(line).map(Some).map_err(|error| {
+    decode_record(line).map(Some)
+}
+
+pub fn decode_record<'a, T: serde::Deserialize<'a>>(line: &'a [u8]) -> Result<T, Error> {
+    serde_json::from_slice(line).map_err(|error| {
         eprintln!("Snapshot decode failed: {error}");
         Error::Storage
     })

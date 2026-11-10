@@ -1,7 +1,7 @@
 use crate::error::Error;
 use crate::parser::{self, Comparison, Expression, Ordering, Predicate, Projection, Statement};
 use crate::schema::{Cell, ColumnType, Literal, Schema};
-use crate::storage::{write_record, Row, Storage, Table, Writer};
+use crate::storage::{decode_record, write_record, Row, Storage, Table, Writer};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -352,7 +352,37 @@ fn select(
     let mut bytes = 0;
     let mut rows: Vec<Candidate> = Vec::new();
     if limit != 0 {
-        for row in table.scan()? {
+        let filter_before_decode = !filters.is_empty()
+            && schema
+                .columns
+                .iter()
+                .any(|column| matches!(column.kind, ColumnType::Vector(_)));
+        let scan: Box<dyn Iterator<Item = Result<Row, Error>>> = if filter_before_decode {
+            // When many rows pass, parsing the same row twice costs more than it saves.
+            // Sampling only selects a scan strategy; all decoded rows are still filtered.
+            const SAMPLE_ROWS: usize = 32;
+            let mut sampled = 0;
+            let mut accepted = 0;
+            let mut prefilter = true;
+            let filters = &filters;
+            Box::new(table.scan_where(move |line| {
+                if !prefilter {
+                    return Ok(true);
+                }
+                let matches = matches_snapshot(line, filters)?;
+                if sampled < SAMPLE_ROWS {
+                    sampled += 1;
+                    accepted += usize::from(matches);
+                    if sampled == SAMPLE_ROWS && accepted > SAMPLE_ROWS / 4 {
+                        prefilter = false;
+                    }
+                }
+                Ok(matches)
+            })?)
+        } else {
+            Box::new(table.scan()?)
+        };
+        for row in scan {
             let row = row?;
             if !matches(&row, &filters) {
                 continue;
@@ -456,17 +486,34 @@ fn bind_filters(
         .collect()
 }
 
-fn matches(row: &Row, filters: &[(usize, Comparison, Cell)]) -> bool {
-    filters.iter().all(|(index, op, value)| {
-        let order = row[*index].compare(value).expect("bound scalar comparison");
-        match op {
-            Comparison::Equal => order.is_eq(),
-            Comparison::Less => order.is_lt(),
-            Comparison::LessEqual => order.is_le(),
-            Comparison::Greater => order.is_gt(),
-            Comparison::GreaterEqual => order.is_ge(),
+fn matches_snapshot(line: &[u8], filters: &[(usize, Comparison, Cell)]) -> Result<bool, Error> {
+    // Borrow raw cells so a rejected row never materializes its vector.
+    let cells: Vec<&serde_json::value::RawValue> = decode_record(line)?;
+    for (index, op, expected) in filters {
+        let raw = cells.get(*index).ok_or(Error::Storage)?;
+        let actual: Cell = decode_record(raw.get().as_bytes())?;
+        if !matches_value(&actual, *op, expected) {
+            return Ok(false);
         }
-    })
+    }
+    Ok(true)
+}
+
+fn matches(row: &Row, filters: &[(usize, Comparison, Cell)]) -> bool {
+    filters
+        .iter()
+        .all(|(index, op, value)| matches_value(&row[*index], *op, value))
+}
+
+fn matches_value(actual: &Cell, op: Comparison, expected: &Cell) -> bool {
+    let order = actual.compare(expected).expect("bound scalar comparison");
+    match op {
+        Comparison::Equal => order.is_eq(),
+        Comparison::Less => order.is_lt(),
+        Comparison::LessEqual => order.is_le(),
+        Comparison::Greater => order.is_gt(),
+        Comparison::GreaterEqual => order.is_ge(),
+    }
 }
 
 #[cfg(test)]
@@ -643,6 +690,42 @@ mod transaction_tests {
 mod vector_tests {
     use super::Executor;
     use serde_json::json;
+
+    #[test]
+    fn filter_remains_active_after_sampling_switches_scan_strategy() {
+        let mut db = Executor::default();
+        db.execute("CREATE TABLE t (id BIGINT PRIMARY KEY, bucket BIGINT, v VECTOR(1))")
+            .unwrap();
+        let rows = (0..40)
+            .map(|id| format!("({id},{},'[{id}]')", usize::from(id >= 32)))
+            .collect::<Vec<_>>()
+            .join(",");
+        db.execute(&format!("INSERT INTO t VALUES {rows}")).unwrap();
+        let result = db
+            .execute("SELECT id FROM t WHERE bucket = 0 ORDER BY L2_DISTANCE(v,'[39]') LIMIT 2")
+            .unwrap();
+        assert_eq!(result["rows"], json!([[31], [30]]));
+    }
+
+    #[test]
+    fn filters_after_vector_preserve_visibility_and_scalar_precision() {
+        let mut db = Executor::default();
+        db.execute("CREATE TABLE t (id BIGINT PRIMARY KEY, v VECTOR(2), label VARCHAR(4))")
+            .unwrap();
+        db.execute("INSERT INTO t VALUES (-9223372036854775808,'[1,0]','甲'), (9223372036854775807,'[0,0]','甲'), (0,'[2,0]','乙')").unwrap();
+        let sql = "SELECT id FROM t WHERE label = '甲' AND id > -1 ORDER BY L2_DISTANCE(v,'[0,0]') LIMIT 1";
+        assert_eq!(db.execute(sql).unwrap()["rows"], json!([[i64::MAX]]));
+        db.execute("BEGIN").unwrap();
+        db.execute("UPDATE t SET label = '乙' WHERE id = 9223372036854775807")
+            .unwrap();
+        assert_eq!(db.execute(sql).unwrap()["rows"], json!([]));
+        db.execute("ROLLBACK").unwrap();
+        assert_eq!(db.execute(sql).unwrap()["rows"], json!([[i64::MAX]]));
+        assert_eq!(
+            db.execute("SELECT id FROM t ORDER BY id LIMIT 0").unwrap()["rows"],
+            json!([])
+        );
+    }
 
     #[test]
     fn direct_distance_sort_filters_and_breaks_ties_by_primary_key() {
