@@ -22,6 +22,6 @@ fn main() -> io::Result<()> {
     protocol::serve(
         io::stdin().lock(),
         io::stdout().lock(),
-        move |sql, _mode| executor.execute(sql),
+        move |sql, _mode| executor.execute_wire(sql),
     )
 }

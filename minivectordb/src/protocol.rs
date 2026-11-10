@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::io::{self, BufRead, Write};
 
@@ -7,9 +8,27 @@ pub enum SearchMode {
     Ann,
 }
 
-pub type ExecuteResult = Result<Map<String, Value>, (&'static str, &'static str)>;
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum Output {
+    Fields(Map<String, Value>),
+    Query {
+        columns: Vec<String>,
+        rows: Vec<Vec<crate::executor::ProjectedValue>>,
+    },
+}
 
-fn emit(output: &mut impl Write, response: &Value) -> io::Result<()> {
+pub type ExecuteResult = Result<Output, (&'static str, &'static str)>;
+
+#[derive(Serialize)]
+struct Success<'a> {
+    id: &'a Value,
+    ok: bool,
+    #[serde(flatten)]
+    output: Output,
+}
+
+fn emit(output: &mut impl Write, response: &impl Serialize) -> io::Result<()> {
     serde_json::to_writer(&mut *output, response)?;
     output.write_all(b"\n")?;
     output.flush()
@@ -63,17 +82,16 @@ pub fn serve(
             Some(_) => Err(("UNSUPPORTED_OP", "Unsupported operation")),
             None => Err(("INVALID_REQUEST", "Expected an operation name")),
         };
-        let response = match result {
-            Ok(mut fields) => {
-                fields.insert("id".into(), id.clone());
-                fields.insert("ok".into(), Value::Bool(true));
-                Value::Object(fields)
-            }
-            Err((code, message)) => json!({
-                "id": id, "ok": false, "error": {"code": code, "message": message}
-            }),
-        };
-        emit(&mut output, &response)?;
+        match result {
+            Ok(output_fields) => emit(
+                &mut output,
+                &Success { id, ok: true, output: output_fields },
+            )?,
+            Err((code, message)) => emit(
+                &mut output,
+                &json!({"id": id, "ok": false, "error": {"code": code, "message": message}}),
+            )?,
+        }
     }
 }
 

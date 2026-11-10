@@ -1,5 +1,6 @@
 use crate::error::Error;
 use crate::parser::{self, Comparison, Expression, Ordering, Predicate, Projection, Statement};
+use crate::protocol::Output;
 use crate::schema::{Cell, ColumnType, Literal, Schema};
 use crate::storage::{decode_record, write_record, Row, Storage, Table, Writer};
 use serde_json::{json, Map, Value};
@@ -18,7 +19,7 @@ impl Executor {
         })
     }
 
-    pub fn execute(&mut self, sql: &str) -> crate::protocol::ExecuteResult {
+    pub fn execute_wire(&mut self, sql: &str) -> crate::protocol::ExecuteResult {
         self.storage
             .ensure_available()
             .and_then(|()| parser::parse(sql))
@@ -26,7 +27,14 @@ impl Executor {
             .map_err(Error::response)
     }
 
-    fn run(&mut self, statement: Statement) -> Result<Map<String, Value>, Error> {
+    #[cfg(test)]
+    fn execute(&mut self, sql: &str) -> Result<Map<String, Value>, (&'static str, &'static str)> {
+        self.execute_wire(sql).map(|output| {
+            serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap()
+        })
+    }
+
+    fn run(&mut self, statement: Statement) -> Result<Output, Error> {
         match statement {
             Statement::Begin => self.storage.begin()?,
             Statement::Commit => self.storage.commit()?,
@@ -50,9 +58,10 @@ impl Executor {
                 return self
                     .storage
                     .write_statement(|storage| mutate(storage, statement))
+                    .map(Output::Fields)
             }
         }
-        Ok(Map::new())
+        Ok(Output::Fields(Map::new()))
     }
 }
 
@@ -233,11 +242,34 @@ enum BoundExpr {
     Distance(BoundDistance),
 }
 
-impl BoundExpr {
-    fn value(&self, row: &Row) -> Value {
+#[derive(Debug, serde::Serialize)]
+#[serde(untagged)]
+pub enum ProjectedValue {
+    Integer(i64),
+    Text(String),
+    Vector(Vec<f32>),
+    Distance(f64),
+}
+
+impl ProjectedValue {
+    fn heap_bytes(&self) -> usize {
         match self {
-            Self::Column(index) => row[*index].json(),
-            Self::Distance(distance) => json!(distance.value(row)),
+            Self::Text(text) => text.capacity(),
+            Self::Vector(vector) => vector.capacity() * std::mem::size_of::<f32>(),
+            _ => 0,
+        }
+    }
+}
+
+impl BoundExpr {
+    fn value(&self, row: &Row) -> ProjectedValue {
+        match self {
+            Self::Column(index) => match &row[*index] {
+                Cell::BigInt(value) => ProjectedValue::Integer(*value),
+                Cell::Text(value) => ProjectedValue::Text(value.clone()),
+                Cell::Vector(value) => ProjectedValue::Vector(value.clone()),
+            },
+            Self::Distance(distance) => ProjectedValue::Distance(distance.value(row)),
         }
     }
 }
@@ -265,7 +297,7 @@ impl SortValue {
 
 struct Candidate {
     key: i64,
-    values: Vec<Value>,
+    values: Vec<ProjectedValue>,
     sort: Vec<SortValue>,
     bytes: usize,
 }
@@ -276,7 +308,7 @@ fn select(
     filters: Vec<Predicate>,
     order: Vec<Ordering>,
     limit: usize,
-) -> Result<Map<String, Value>, Error> {
+) -> Result<Output, Error> {
     let schema = &table.schema;
     let projection: Vec<(BoundExpr, String)> = match projection {
         None => schema
@@ -303,7 +335,7 @@ fn select(
             .collect::<Result<_, Error>>()?,
     };
     let filters = bind_filters(schema, filters)?;
-    let order: Vec<(SortKey<'_>, bool)> = order
+    let mut order: Vec<(SortKey<'_>, bool)> = order
         .into_iter()
         .map(|Ordering(expression, descending)| {
             let name = match expression {
@@ -331,6 +363,13 @@ fn select(
             Ok((SortKey::Column(column), descending))
         })
         .collect::<Result<_, Error>>()?;
+    // The first ordering for a column decides every comparison where it differs.
+    // A later ordering of the same column cannot break a tie.
+    let mut ordered_columns = HashSet::new();
+    order.retain(|(key, _)| match key {
+        SortKey::Column(index) => ordered_columns.insert(*index),
+        _ => true,
+    });
     let compare = |a: &Candidate, b: &Candidate| {
         a.sort
             .iter()
@@ -417,7 +456,8 @@ fn select(
                 .map(|(expr, _)| expr.value(&row))
                 .collect();
             let size = 128
-                + candidate.values.iter().map(value_memory).sum::<usize>()
+                + candidate.values.capacity() * std::mem::size_of::<ProjectedValue>()
+                + candidate.values.iter().map(ProjectedValue::heap_bytes).sum::<usize>()
                 + candidate
                     .sort
                     .iter()
@@ -449,22 +489,9 @@ fn select(
     }
     let columns: Vec<_> = projection.into_iter().map(|(_, label)| label).collect();
     let rows: Vec<_> = rows.into_iter().map(|candidate| candidate.values).collect();
-    Ok(Map::from_iter([
-        ("columns".into(), json!(columns)),
-        (
-            "rows".into(),
-            Value::Array(rows.into_iter().map(Value::Array).collect()),
-        ),
-    ]))
+    Ok(Output::Query { columns, rows })
 }
 
-fn value_memory(value: &Value) -> usize {
-    64 + match value {
-        Value::String(text) => text.len(),
-        Value::Array(values) => values.iter().map(value_memory).sum(),
-        _ => 0,
-    }
-}
 fn bind_filters(
     schema: &Schema,
     filters: Vec<Predicate>,

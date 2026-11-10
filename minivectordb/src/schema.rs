@@ -1,5 +1,4 @@
 use crate::error::Error;
-use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -23,14 +22,6 @@ pub enum Cell {
 }
 
 impl Cell {
-    pub fn json(&self) -> Value {
-        match self {
-            Self::BigInt(value) => json!(value),
-            Self::Text(value) => json!(value),
-            Self::Vector(value) => json!(value),
-        }
-    }
-
     pub fn compare(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
             (Self::BigInt(a), Self::BigInt(b)) => Some(a.cmp(b)),
