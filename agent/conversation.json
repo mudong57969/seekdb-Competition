@@ -1,0 +1,445 @@
+{
+  "format": "minivectordb-learning-material-v1",
+  "status": "local_candidate_evidence_insufficient",
+  "scope": "Stage 1–6 项目对话与原始工具输出的选编。audit 为 Stage 7 整理说明，不是历史消息或评分。",
+  "provenance": {
+    "history": "当前 Codex 项目的六个阶段主指令与各阶段最终回复来自原始消息字段。旁路 ChatGPT 对话只用于核对指令草稿来源。",
+    "omissions": "不包含完整聊天导出、系统指令、工具全部输出、授权回执、无关账号配置及附件。未取得学生独立实验日志或原始个人复盘。",
+    "path": "语雀第 4.4 节确认默认读取 agent/conversation.json；公开比赛分支只有根目录占位。根文件保留。私有评测配置或运行时覆盖未核验。",
+    "rubric": "已阅读官方语雀赛题第 3.4 和 4.4 节。评审规则为 agent-learning-evidence-v3-unbounded。此文件是学习输入材料，审查清单没有打分。",
+    "official_spec": "https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/lg8enxlmwg69unt6"
+  },
+  "stages": [
+    {
+      "stage": 1,
+      "prompt": {
+        "role": "student",
+        "id": "01a1c562-7ea4-7890-8b93-72d16303d3cb",
+        "text": "你现在是 OceanBase 2026 MiniVectorDB 比赛项目的开发助手，请开始第一阶段实际编码。\n\n## 一、项目环境\n\n项目路径：`/home/yaoyi0125/projects/seekdb`\n\nGit 分支：`2026-competition-round2`\n\n官方基线 Commit：\\\n`f4d4e26653af823a7601668802f80e374ad6643c`\n\n官方题包版本：`minivectordb-public-v4`\n\n当前已完成：\n\n- WSL Ubuntu 24.04 环境配置\n- 官方比赛分支更新\n- 官方 20 个公开测试用例获取\n- 官方 stdin/stdout 通信协议获取\n- Codex 项目目录配置\n\n目前不需要 Git Push，先在本地完成开发和验证。\n\n## 二、本轮目标\n\n**实现 Rust 版 MiniVectorDB 的最小可运行程序，并通过官方 `handshake-only` 测试。**\n\n本轮暂不实现完整 SQL 数据库，避免一次性修改过多模块。\n\n### 任务 1：检查开发环境\n\n1. 读取 `STDIO_PROTOCOL.md`。\n2. 读取 `protocol_check/README.md`、`run.py`、`example_stdio.py`。\n3. 检查 Rust、Cargo 和 Docker 是否可用。\n4. 确认当前 Git 工作区状态。\n5. 确定不影响官方测试文件的项目目录结构。\n\n### 任务 2：实现 JSONL 通信协议\n\n使用 Rust 实现：\n\n1. 程序启动后初始化 `/data`，并主动输出 `{\"type\":\"ready\"}`。\n2. 输出后立即 flush。\n3. 从 stdin 逐行读取 UTF-8 JSON 请求。\n4. 支持 `execute` 和 `shutdown` 操作。\n5. 正确解析 `id`、`sql`、`search_mode`。\n6. 所有响应保留原始 `id` 的 JSON 类型。\n7. execute 暂时返回合法的未实现错误，不能伪造 SQL 执行成功。\n8. shutdown 返回 `{\"id\":请求ID,\"ok\":true}`，随后正常退出。\n9. stdout 只能输出 JSONL 协议数据，日志必须写入 stderr。\n10. 错误输入不能导致程序意外崩溃。\n\n通信层必须与未来的 SQL 执行器分离。\n\n### 任务 3：编写 Dockerfile\n\n1. 创建 Rust 项目及必要模块。\n2. 编写能够从源码完成构建的 Dockerfile。\n3. 镜像默认启动 MiniVectorDB 程序。\n4. 数据持久化目录为 `/data`。\n5. 不启动 HTTP 或 TCP 服务。\n6. 不使用现成数据库引擎。\n7. 不直接复制官方 example_stdio.py 作为最终实现。\n\n### 任务 4：执行真实测试\n\n先执行 Rust 编译检查和单元测试。\n\n再构建 Docker 镜像，并运行官方：\n\n`python3 protocol_check/run.py --image \"$VECTORDB_IMAGE\" --handshake-only --output \"protocol-results/handshake-$(date +%Y%m%d-%H%M%S)\"`\n\n要求：\n\n- 使用真实构建的 Docker 镜像。\n- 测试必须实际运行。\n- 读取 `result.json`，确认 `passed=true`。\n- 如果失败，分析日志，修复并复测。\n- 不得用自编测试代替官方握手测试。\n- 记录实际运行命令、退出码和报告路径。\n\n如果环境缺少必要工具，先检查原因，采取最小必要修复；涉及系统级安装或影响其他项目的配置变更时，先说明并请求确认。\n\n## 三、开发纪律\n\n- 功能正确性优先。\n- 不修改官方协议、测试脚本和预期输出。\n- 不执行 Git Push。\n- 不进行正式比赛提测。\n- 不强制重置 Git。\n- 不删除已有项目文件。\n- 保留真实测试和失败记录。\n- 不编造测试结果或学习证据。\n- 不把 Agent 自己生成的解释冒充学生理解。\n- 本轮只完成通信协议，不自动进入 SQL 开发。\n\n## 四、最终汇报要求\n\n完成后用中文输出：\n\n1. 新增及修改的文件列表。\n2. 实际实现的功能。\n3. Rust 编译及单元测试结果。\n4. Docker 镜像构建结果。\n5. 官方 handshake-only 测试结果及证据路径。\n6. 失败、修复与复测记录。\n7. 当前 Git 状态。\n8. 下一阶段开发建议。\n\n**本轮完成标准：官方 `handshake-only` 测试实际通过。**\n\n如果无法达到该标准，必须明确指出阻碍和已经验证的结果，不得虚报成功。\n",
+        "origin": {
+          "type": "authorship_unverified",
+          "note": "可确认发送者为用户，无法据此确认独立撰写。"
+        },
+        "source_message_role": "user"
+      },
+      "report": {
+        "role": "agent",
+        "id": "msg_0f70b128ebcc85f3016af30c586f5087d0ac4258ae08dfa4dd",
+        "text": "**第一阶段已完成。** Rust 版 MiniVectorDB 从源码构建为 Docker 镜像 `minivectordb:stage1`，官方 `handshake-only` 对该镜像实际运行通过。最终复测退出码为 `0`，`result.json` 确认为 `passed: true`。\n\n### 实现与文件\n\n程序初始化 `/data` 后主动发送 `{\"type\":\"ready\"}`。通信层逐行读取 UTF-8 JSON，每条响应立即 flush，并保留请求 `id` 的 JSON 类型和数值精度。`execute` 解析 `sql` 和 `search_mode` 后返回 `NOT_IMPLEMENTED`，`shutdown` 回复成功并正常退出。无法解析或缺少 `id` 的输入记入 stderr，随后继续读取。通信层与 SQL 执行入口分离。\n\n- 修改 [Dockerfile](/home/yaoyi0125/projects/seekdb/Dockerfile)，加入多阶段源码构建、`/data` 数据卷和默认启动入口。\n- 新增 [.dockerignore](/home/yaoyi0125/projects/seekdb/.dockerignore)，排除测试产物和 Cargo 构建目录。\n- 新增 [Cargo.toml](/home/yaoyi0125/projects/seekdb/minivectordb/Cargo.toml)、[Cargo.lock](/home/yaoyi0125/projects/seekdb/minivectordb/Cargo.lock) 和 [Cargo 项目忽略规则](/home/yaoyi0125/projects/seekdb/minivectordb/.gitignore)。\n- 新增 [main.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/main.rs) 和 [protocol.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/protocol.rs)，后者包含 3 个协议单元测试。\n\n### 实际验证与复测\n\n| 检查 | 结果 |\n|---|---|\n| `cargo check`、`cargo test`、`cargo build`，均带 `--locked --manifest-path minivectordb/Cargo.toml` | 均退出 `0`，单元测试 **3 通过、0 失败**。[Rust 验证日志](/home/yaoyi0125/projects/seekdb/protocol-results/rust-validation.log) |\n| Docker 源码构建 | 退出 `0`，镜像 ID 为 `sha256:4bd3f561a4634b41e15666ab5e48e727e36bc5d78ecb090a46aa3a836cdf2d4c`。[构建命令与日志](/home/yaoyi0125/projects/seekdb/protocol-results/docker-build-final.log) |\n| `python3 protocol_check/run.py --image minivectordb:stage1 --handshake-only --output protocol-results/handshake-20261110-202141` | 退出 `0`，`handshake: PASS`，耗时 617 ms。[官方驱动报告](/home/yaoyi0125/projects/seekdb/protocol-results/handshake-20261110-202141/result.json) |\n\n测试先对空实现运行，3 项均因缺少协议响应失败，接入实现后全部通过。Docker 安装初次因非交互 `sudo` 需要密码而退出，随后用 WSL 的 root 启动选项完成已授权的安装。首次镜像构建因 Docker Hub 连接重置失败，改用 AWS ECR 公共镜像库中的 Rust 和 Debian 基础镜像后完成源码构建。排除 Cargo 产物后再次构建并复测，官方握手仍通过。 [单元测试初始失败日志](/home/yaoyi0125/projects/seekdb/protocol-results/rust-red.log) · [Docker 安装日志](/home/yaoyi0125/projects/seekdb/protocol-results/docker-setup.log) · [首次构建失败日志](/home/yaoyi0125/projects/seekdb/protocol-results/docker-build.log)\n\n**Git 状态**仍在 `2026-competition-round2`，HEAD 为 `f4d4e26653af823a7601668802f80e374ad6643c`。上述 7 个文件的改动均未暂存或提交，官方协议、测试脚本和预期输出与基线一致。未推送或提测。\n\n**下一阶段**接入最小 SQL 执行器和内存表存储，先以官方 `sql_crud` 验证建表、插入、查询、更新和删除。本轮的官方验证范围是握手与关闭，尚无 SQL 用例执行结果。"
+      }
+    },
+    {
+      "stage": 2,
+      "prompt": {
+        "role": "student",
+        "id": "01a1c56a-f6d8-7dc0-ab4b-2eb02686e67f",
+        "text": "继续 OceanBase 2026 MiniVectorDB 比赛项目，开始第二阶段：SQL 执行器和内存表存储。\n\n项目目录：\\\n`/home/yaoyi0125/projects/seekdb`\n\n分支：\\\n`2026-competition-round2`\n\n当前已有：\n\n- Rust JSONL 协议实现\n- Dockerfile 和可构建镜像\n- 官方 handshake-only 已通过\n- 通信层与 SQL 执行入口已分离\n- 尚未实现 SQL 语义和存储\n\n## 一、开发前检查\n\n1. 检查 Git 状态，保留第一阶段的全部改动。\n2. 完整读取 `mysqltest/cases/sql_crud.test` 和对应 `.result`。\n3. 阅读其余 SQL 公开用例，确定数据库必须支持的语法、类型和错误行为。\n4. 检查现有 Rust 模块结构，避免破坏已通过的 JSONL 协议。\n5. 设计 SQL Parser、Executor、Schema、Memory Storage 的模块边界。\n\n本阶段可以修改代码，但不得修改官方题包。\n\n## 二、实现基础 SQL\n\n实现：\n\n1. CREATE TABLE，支持 BIGINT、VARCHAR(n)、VECTOR(n)，要求 BIGINT 主键。\n2. INSERT INTO，支持单行及多行 VALUES。\n3. SELECT，支持普通列投影和 SELECT \\*。\n4. UPDATE ... SET。\n5. DELETE FROM。\n6. WHERE，支持 =、<、<=、>、>= 和 AND。\n7. ORDER BY，支持 ASC、DESC。\n8. LIMIT。\n9. 必要的列别名 AS。\n10. 主键唯一性、VARCHAR Unicode 字符长度及 BIGINT 整数精度。\n\n要求：\n\n- SQL 解析与执行分离。\n- 不允许针对公开测试 SQL 硬编码结果。\n- 采用明确的数据类型及错误处理。\n- 多行 INSERT 必须具备语句级原子性。\n- 不支持的 SQL 必须返回合法错误，不得静默执行。\n- 当前先使用内存存储，设计接口时考虑未来的磁盘存储和事务。\n- 不使用 SQLite 等现成数据库引擎。\n- 不破坏现有 JSONL 协议。\n\n## 三、测试要求\n\n先编写 Rust 单元测试，覆盖建表、插入、查询、更新、删除和错误输入。\n\n随后：\n\n1. 执行 cargo check、cargo test、cargo build。\n2. 从源码重新构建 Docker 镜像，使用新的 stage2 标签。\n3. 运行官方 handshake-only 回归测试。\n4. 运行官方 sql_crud 用例。\n5. 如失败，分析实际输出和预期输出，定位问题，修复后重新测试。\n6. sql_crud 通过后，逐个运行其余 7 个 sql\\_\\* 公开用例。\n7. 保存每次实际测试的命令、退出码、结果文件和失败日志。\n8. 不放宽官方配置，不修改测试断言。\n\n## 四、架构要求\n\n推荐独立模块：\n\n- protocol.rs：JSONL 通信。\n- parser.rs：SQL 词法和语法解析。\n- schema.rs：列类型、表定义和约束。\n- storage.rs：内存存储及未来持久化接口。\n- executor.rs：SQL 执行。\n- error.rs：内部错误分类与协议错误映射。\n\n允许根据实际工程调整文件结构，但必须解释原因。\n\n## 五、学习与验证证据\n\n记录真实开发过程中的技术决策、失败用例、修正原因和复测结果。\n\n不要自动把 Agent 的解释记为学生理解。\n\n本阶段重点验证：\n\n- BIGINT 是否保持 64 位整数精度。\n- 多行 INSERT 失败是否完整回滚。\n- VARCHAR 长度是否按 Unicode 字符数计算。\n- WHERE 与 ORDER BY 是否符合题目语义。\n\n这些是建议的验证方向。未实际完成的内容只能标为计划，不得记录为已执行。\n\n## 六、工作约束\n\n- 不进行 Git Push。\n- 不正式提测。\n- 不删除现有第一阶段代码。\n- 不修改官方测试及结果文件。\n- 不修改当前比赛分支名称。\n- 不覆盖已有测试证据。\n- 功能正确性优先，不为追求性能牺牲语义。\n- 没有实际测试结果不能声明通过。\n- 保留第一阶段 handshake-only 的通过能力。\n\n## 七、完成标准\n\n1. cargo check、cargo test、cargo build 全部通过。\n2. Docker 镜像构建成功。\n3. 官方 handshake-only 回归测试通过。\n4. 官方 sql_crud 测试通过。\n5. 其他 SQL 公开用例逐个执行，并真实报告结果。\n6. 提供全部修改文件、测试证据及剩余问题。\n\n完成后以中文输出完整的第二阶段开发与验收报告。\n\n本轮不要自动进入磁盘持久化、事务或 ANN 开发。\n",
+        "origin": {
+          "type": "authorship_unverified",
+          "note": "可确认发送者为用户，无法据此确认独立撰写。"
+        },
+        "source_message_role": "user"
+      },
+      "report": {
+        "role": "agent",
+        "id": "msg_0f70b128ebcc85f3016af30e5bc82887d09e618e6e35250086",
+        "text": "**第二阶段验收通过。** `cargo check`、`cargo test`、`cargo build` 均退出 `0`。`minivectordb:stage2` 从源码无缓存构建成功，官方握手回归和 8 个公开 SQL 用例均实际运行通过。逐份读取了 9 个官方 `result.json`，全部为 `passed: true`。\n\n### 实现与文件\n\n支持带 `BIGINT` 主键的建表、单行及多行 `INSERT`、列投影和 `SELECT *`、`UPDATE`、`DELETE`、`WHERE` 的五种比较和 `AND`、`ORDER BY ASC/DESC`、`LIMIT` 及列别名 `AS`。`BIGINT` 使用 `i64`，`VARCHAR(n)` 按 Unicode 字符计数，`VECTOR(n)` 存储有限的 float32 值并检查维度。多行写入先验证整批数据与主键，任一行失败时整条语句不生效。不支持的语句返回协议错误。\n\n| 文件 | 变更 |\n|---|---|\n| [parser.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/parser.rs) | 新增 SQL 词法与语法解析，生成 AST |\n| [schema.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/schema.rs) | 新增列类型、主键约束、值校验与转换 |\n| [storage.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/storage.rs) | 新增内存表、行扫描和批量变更接口 |\n| [executor.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/executor.rs) | 新增列绑定、过滤、排序、投影、写入执行和单元测试 |\n| [error.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/error.rs) | 新增内部错误分类与协议映射 |\n| [main.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/main.rs) | 将进程内的执行器接入原有 JSONL 回调 |\n\n### 验证证据\n\n| 检查 | 实测结果 |\n|---|---|\n| Rust 编译检查、单元测试、构建 | 均退出 `0`，**8 通过、0 失败**。[Rust 验证日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/rust-validation-final.log) |\n| Docker 无缓存构建 | 退出 `0`，镜像 `minivectordb:stage2`，ID `sha256:c0f9211224578c7b8cd73e615400dcab976dc97182a5dbaa9e0e008952ceeace`。[构建日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/docker-wIHmrO/build.log) |\n| 官方 `handshake-only` | 退出 `0`，`PASS`。[握手报告](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/docker-wIHmrO/handshake/result.json) |\n| 官方 `sql_crud` | 退出 `0`，`PASS`。[CRUD 报告](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_crud/result.json) |\n| 其余 7 个 SQL 用例 | `sql_bigint`、`sql_comparisons`、`sql_empty`、`sql_ordering`、`sql_primary_key`、`sql_unicode`、`sql_unsupported` 逐个执行，均退出 `0`、`PASS`。[逐项汇总](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/docker-wIHmrO/summary.log) |\n\n单元测试实测覆盖了超过 JavaScript 安全整数范围的值、BIGINT 溢出、中文和 emoji 的长度限制、批量写入回滚，以及过滤、别名排序和 `LIMIT`。初始 SQL 测试按预期因空执行器失败。另一个边界测试发现 `WHERE` 的长字符串常量被误用写入列宽限制，修复后查询正常返回空结果，写入仍会检查列宽。最终 Rust 测试和官方容器测试全部通过。每次官方运行的命令、退出码、报告和 stderr 都保存在新的证据目录。 [初始失败日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/rust-red.log) · [列宽问题复现](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/varchar-filter-red.log) · [工程记录](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/development-notes.txt)\n\n**Git 状态**仍为 `2026-competition-round2`，HEAD 为 `f4d4e26653af823a7601668802f80e374ad6643c`。两阶段改动均保留在工作区，官方协议、测试和预期输出与基线一致。未提交、推送或提测。 [最终 Git 状态](/home/yaoyi0125/projects/seekdb/protocol-results/stage2-vZvgOW/git-final.log)\n\n**剩余范围**包括表级主键声明、指定列清单的 `INSERT`、`NULL` 和完整 MySQL 排序规则。当前 `VECTOR(n)` 只支持存储与投影。本轮停在内存 SQL，磁盘持久化、显式事务、恢复和向量检索留待后续阶段。"
+      }
+    },
+    {
+      "stage": 3,
+      "prompt": {
+        "role": "student",
+        "id": "01a1c571-f11a-72b2-ade3-dc83cc125126",
+        "text": "继续 OceanBase 2026 MiniVectorDB 比赛项目。\n\n项目目录：\\\n`/home/yaoyi0125/projects/seekdb`\n\n当前分支：\\\n`2026-competition-round2`\n\n目前已经完成：\n\n- Rust JSONL 协议\n- Docker 镜像构建\n- 官方 handshake-only 测试\n- 基础 SQL 引擎\n- 8 个公开 SQL 用例全部通过\n- 当前存储仍为内存实现\n\n本轮开始第三阶段：磁盘持久化、显式事务与崩溃恢复。\n\n## 一、开发前检查\n\n1. 检查 Git 工作区，完整保留前两阶段代码和证据。\n2. 阅读 STDIO_PROTOCOL.md、mysqltest/README.md 及所有 storage\\_*、transaction\\_* 公开用例。\n3. 阅读现有 parser.rs、schema.rs、storage.rs、executor.rs 和 protocol.rs。\n4. 明确事务语义、存储限制和异常恢复要求。\n5. 设计持久化和事务实现方案，重点分析磁盘 I/O、内存占用、原子性与恢复复杂度。\n6. 禁止使用 SQLite、RocksDB 或其他现成数据库引擎。\n\n## 二、实现磁盘持久化\n\n要求：\n\n1. 表定义和数据持久化到 /data。\n2. 正常关闭及重启后，数据和表结构保持一致。\n3. 支持多个表。\n4. 插入、更新、删除后能够正确恢复。\n5. 不允许启动时无条件清空数据。\n6. 数据量超过内存预算时，不得依赖全量载入内存。\n7. 提供有界缓存和磁盘迭代访问能力。\n8. 控制磁盘 I/O 和文件数量，避免明显不合理的存储开销。\n\n## 三、实现事务\n\n支持：\n\n- BEGIN\n- COMMIT\n- ROLLBACK\n- 自动提交\n- 事务内读到自己的修改\n- 语句失败只撤销本条语句\n- 显式事务中此前成功的语句仍可提交\n- ROLLBACK 后完整恢复事务前的数据状态\n- shutdown 自动回滚未提交事务\n\n所有表数据修改必须通过统一事务路径。\n\n## 四、实现崩溃恢复\n\n要求：\n\n1. 已确认提交的数据必须在异常终止后恢复。\n2. 未提交事务不能部分生效。\n3. 提交请求发出但未收到成功响应时，允许完整生效或完整不生效，不能部分生效。\n4. 恢复过程必须具备幂等性。\n5. 恢复过程中再次异常退出，重新启动仍能继续恢复。\n6. 完成恢复之后才能输出 ready。\n7. 实现 WAL、原子快照或其他能够证明满足要求的方案，先分析取舍再实施。\n8. 不得只依赖 shutdown 时保存数据。\n\n## 五、执行官方测试\n\n必须执行：\n\n- storage_restart\n- storage_mutations\n- storage_multiple_tables\n- transaction_commit\n- transaction_rollback\n- transaction_failed_insert\n- transaction_autocommit_atomic\n- transaction_shutdown_rollback\n\n同时重新运行：\n\n- handshake-only\n- 全部 8 个 sql\\_\\* 用例\n\n所有测试必须使用重新构建的 Docker 镜像。\n\n如果失败，记录失败原因、修复方式和复测结果。\n\n## 六、增加独立故障测试\n\n除公开测试外，请设计并真实执行：\n\n1. 自动提交成功后强制终止进程，重启检查数据。\n2. 显式事务未提交时强制终止，重启确认未提交修改不可见。\n3. 多条修改语句组成一个事务，提交后强杀并验证完整恢复。\n4. 在恢复过程中再次终止进程，然后重新启动恢复。\n5. 模拟损坏或截断的未提交日志尾部，验证能安全处理。\n6. 检测恢复重复执行是否导致记录重复或遗漏。\n7. 构造超过预设内存预算的数据集，检查是否存在全量载入问题。\n\n注意：官方崩溃模型限定为进程强制终止。额外测试不得把不在赛题范围内的磁盘损坏容错当作必须功能。\n\n## 七、开发纪律\n\n- 正确性优先，性能优化后置。\n- 不修改官方测试文件或结果。\n- 不覆盖已有测试证据。\n- 不编造学习记录或测试结果。\n- 不执行 Git Push。\n- 不进行正式提测。\n- 不强制重置 Git。\n- 不擅自修改系统环境。\n- 所有测试必须真实执行并保存结果。\n\n## 八、最终验收标准\n\n1. Rust 编译和单元测试通过。\n2. Docker 从源码构建成功。\n3. 官方握手测试通过。\n4. 8 个 SQL 回归用例全部通过。\n5. 8 个 storage/transaction 公开用例全部通过。\n6. 独立崩溃恢复测试给出真实结果。\n7. 提供内存和磁盘资源测量。\n8. 明确已通过、未通过、未执行项目。\n9. 保留真实学习和实验过程证据。\n\n完成后使用中文输出完整报告，包括：\n\n- 架构与方案取舍\n- 修改文件列表\n- 实测命令及结果\n- 崩溃恢复证据\n- 资源测量\n- 失败及修复复测记录\n- Git 状态\n- 下一阶段建议\n\n本轮暂不实现 ANN 索引，也不执行正式比赛提测。\n",
+        "origin": {
+          "type": "authorship_unverified",
+          "note": "可确认发送者为用户，无法据此确认独立撰写。"
+        },
+        "source_message_role": "user"
+      },
+      "report": {
+        "role": "agent",
+        "id": "msg_0f70b128ebcc85f3016af31100053487d0b38679dfa745b37d",
+        "text": "**第三阶段验收通过。** `minivectordb:stage3` 从源码无缓存构建成功。官方握手、8 个 SQL 回归用例、3 个存储用例和 5 个事务用例全部通过，17 份 `result.json` 均核验为 `passed: true`。独立强杀恢复和超内存数据集实验也已实际运行通过。\n\n[中文验收报告 PDF](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage3-report/build/main.pdf) · [LaTeX 主文件](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage3-report/main.tex) · [排版配置](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage3-report/common.tex)。两页均已渲染检查。可在源目录运行 `latexmk -xelatex -output-directory=build main.tex` 重建。\n\n### 架构与改动\n\n采用**逐表流式快照和事务目录原子发布**。表结构和记录保存在 `/data`，读写各使用 64 KiB 缓冲，扫描逐行解码。写语句先生成并同步替换文件，成功后才更新事务暂存版本。显式事务优先读取自己的暂存版本，失败语句保留此前成功的修改。自动提交共用同一写入路径，正常关闭会回滚未提交事务。\n\n提交通过目录重命名一次发布多张表的变更。恢复时逐个安装剩余快照，已安装的文件会从待处理目录消失，因此再次强杀后仍能继续。恢复完成后才发送 `ready`。相比 WAL，这个方案省去了日志重放和检查点管理，代价是小写入也可能重写整张表，并在写入期间占用额外磁盘空间。\n\n| 文件 | 本轮改动 |\n|---|---|\n| `storage.rs`、`schema.rs`、`Cargo.toml`、`Cargo.lock` | 磁盘快照、流式扫描、事务发布与恢复、序列化 |\n| `parser.rs`、`executor.rs`、`error.rs` | 事务语句、统一写入路径、错误映射，以及 `storage_mutations` 所需的精确 `L2_DISTANCE` |\n| `main.rs`、`protocol.rs` | 握手前完成恢复，关闭回复前释放执行器 |\n| `minivectordb/tests/crash_recovery.py`、`minivectordb/tests/fault_rename.c` | 新增容器故障注入与资源测量工具 |\n\n### 实测与复测\n\n| 验证 | 结果与证据 |\n|---|---|\n| `cargo check`、`cargo test`、`cargo build`，均带 `--locked` | 均退出 `0`，单元测试 **9 通过、0 失败**。[Rust 日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/rust-validation.log) |\n| `docker build --no-cache` | 退出 `0`，生成 `minivectordb:stage3`。[构建日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/docker-9kFASI/build.log) · [镜像 ID](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/docker-9kFASI/image.log) |\n| 官方 `protocol_check/run.py --image minivectordb:stage3` | 握手及 16 个指定用例逐项运行，均退出 `0`。证据目录保留了每项命令、报告及 stderr。[逐项汇总](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/docker-9kFASI/summary.log) |\n| 独立故障脚本 | 最终退出 `0`。验证了已确认自动提交、未提交事务、已确认跨表提交、发布后未应答、恢复途中再次强杀、截断暂存文件清理，以及重复启动不重不漏。强杀容器退出 `137`。[独立测试日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/fault-run-AhLstH/command.log) |\n\n新增事务单测先因 `BEGIN` 尚未实现而失败，接入事务后通过。首次故障注入到达发布点，但未能暂停容器内的 PID 1。将注入器改为阻塞等待外部强杀后，复测确认提交应答和恢复握手都没有提前发出。截断实验针对未发布的快照暂存文件。 [事务初始失败](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/rust-red.log) · [首次故障注入日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/fault-run-7EMjDj/command.log)\n\n### 资源测量与剩余范围\n\n在 **64 MiB** 容器上限下写入 80 行、每行 1 MiB 的负载。更新并重启后，扫描校验了全部 80 个主键。最终数据 **83,888,444 字节**，磁盘分配 **83,890,176 字节**，共两个文件。写入与更新阶段的进程峰值 RSS 为 **16,764 KiB**，重启与扫描阶段为 **5,408 KiB**。写入阶段容器总内存峰值达到 64 MiB，进程累计存储写计数约 **920 MiB**，反映了整表重写的实际开销。 [资源原始记录](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/fault-run-AhLstH/artifacts/resources.json)\n\n本轮没有未通过的最终验收项。未执行其余 4 个官方向量用例、断电测试或已提交文件损坏测试。当前大结果和排序超出查询预算会报错。下一阶段建议先量化小批量写入的放大，再评估分段存储或有界增量日志。\n\nGit 仍在 `2026-competition-round2`，HEAD 为 `f4d4e26653af823a7601668802f80e374ad6643c`。前两阶段代码和证据已保留，官方题包与断言保持原样。改动留在工作区，未提交、推送或正式提测。 [最终 Git 状态](/home/yaoyi0125/projects/seekdb/protocol-results/stage3-Do9zJb/git-final.log)"
+      }
+    },
+    {
+      "stage": 4,
+      "prompt": {
+        "role": "student",
+        "id": "01a1c57d-9fb4-7d90-b467-92363228c314",
+        "text": "继续 OceanBase 2026 MiniVectorDB 比赛项目，开始第四阶段：向量检索、索引维护与完整公开回归。\n\n项目目录：\\\n`/home/yaoyi0125/projects/seekdb`\n\n当前分支：\\\n`2026-competition-round2`\n\n当前进度：\n\n- Stage 1：JSONL 通信协议与 Docker 握手通过。\n- Stage 2：8 个 SQL 公开用例全部通过。\n- Stage 3：3 个存储用例、5 个事务用例全部通过。\n- 已实现流式磁盘存储、事务目录发布与崩溃恢复。\n- 已报告通过 16/20 个公开功能用例。\n- 尚未 Push 或正式提测。\n\n## 一、开发前检查\n\n1. 检查当前 Git 状态，保留前三阶段的全部修改及测试证据。\n2. 完整阅读官方向量测试及对应预期输出：\n   - vector_euclidean\n   - vector_float32\n   - vector_ties_and_filter\n   - vector_index_maintenance\n3. 阅读现有 parser.rs、schema.rs、executor.rs、storage.rs、protocol.rs。\n4. 分析现有 L2_DISTANCE 实现与缺失的向量检索功能。\n5. 明确 exact 与 ann 的行为差异及测试要求。\n\n## 二、实现精确向量检索\n\n实现并验证：\n\n1. L2_DISTANCE 返回欧氏距离。\n2. VECTOR(n) 统一采用有限 float32 数值。\n3. 拒绝维度不匹配、NaN、Infinity 和 float32 转换溢出。\n4. 距离必须根据实际存储后的 float32 向量计算。\n5. 实现精确 TopK，并支持 ORDER BY L2_DISTANCE(...) LIMIT K。\n6. 带 WHERE 的 TopK 必须先过滤，再计算符合条件集合中的前 K 个。\n7. 距离相同时按主键升序排序。\n8. 结果不足 K 条时返回全部符合条件记录。\n9. 支持空候选集合。\n10. 支持必要的距离表达式别名。\n11. 查询必须看到当前事务中已经完成的修改。\n12. 普通查询和向量查询应采用一致的事务可见性规则。\n\n优先使用流式扫描与有界 TopK，避免一次性载入全部向量和距离结果。\n\n## 三、实现向量索引\n\n支持：\n\nCREATE VECTOR INDEX index_name ON table_name(vector_column);\n\n要求：\n\n1. 解析和执行建索引语句。\n2. 建索引后，INSERT、UPDATE、DELETE 的结果必须正确反映到向量查询。\n3. COMMIT 和 ROLLBACK 必须与索引可见性一致。\n4. 重启及崩溃恢复后，索引不得产生过期、重复或不可见记录。\n5. exact 模式必须始终保持精确结果。\n6. ann 模式必须满足官方语义和召回要求。\n\n本阶段首先保证索引语义正确。允许用精确搜索作为 ann 的暂时保底实现，但必须明确报告尚未具备有效的 ANN 加速，不能将其宣称为性能优化完成。\n\n## 四、执行测试\n\n使用新镜像标签：\n\nminivectordb\n\n必须完成：\n\n1. cargo check --locked\n2. cargo test --locked\n3. cargo build --locked\n4. Docker 从源码构建\n5. 官方 handshake-only\n6. 上述 4 个向量公开用例\n7. 官方全部 20 个公开用例回归\n\n使用现有 manifest path 参数或项目脚本，确保命令在正确目录执行。\n\n每次官方测试保留独立的：\n\n- 命令和退出码\n- result.json\n- stdout\n- stderr\n- 失败差异\n\n检查每一个 result.json 的 passed 字段。\n\n如有失败，定位原因、修复并复测，不修改官方测试用例及断言。\n\n## 五、增加独立边界测试\n\n设计并运行：\n\n1. 多个记录距离完全相同的排序。\n2. WHERE 过滤后候选数量少于 K。\n3. 向量数值接近 float32 表示边界。\n4. 向量更新后索引一致性。\n5. 删除和重新插入相同主键后的查询。\n6. 显式事务内更新向量、查询、ROLLBACK、重新查询。\n7. 事务 COMMIT 后强杀，重启验证向量检索。\n8. 大于内存预算的数据集上的向量扫描。\n9. exact 模式与独立暴力计算参考结果交叉对照。\n\n不得用数据库自身的 L2_DISTANCE 实现同时作为被测结果和唯一正确性参考。\n\n## 六、初步性能分析\n\n第三阶段已发现：\n\n- 最终数据约 80 MiB。\n- 累计存储写计数约 920 MiB。\n- 写操作会重写整张表。\n\n请在保持现有正确性的前提下：\n\n1. 对当前小批量写入进行基线测量。\n2. 测量查询耗时、磁盘 I/O、峰值内存。\n3. 用官方 benchmark 的 10000 条、128 维、1000 次 TopK、K=10 作为目标规模，先评估环境能否安全执行。\n4. 解释整表重写可能造成的性能瓶颈。\n5. 比较增量日志、分段存储、页式存储等可行优化。\n6. 给出下一阶段优先级，不擅自进行大型存储架构重写。\n\n注意：必须区分实测值、估算值和未测试假设。\n\n## 七、学习证据\n\n真实记录：\n\n- 技术问题与实现假设\n- 测试设计与实际输出\n- 发现的错误及其原因\n- 修复与复测\n- 性能取舍\n- 已知局限\n\n学生尚未实际作出的判断不得伪装成学生贡献。\n\n## 八、工作约束\n\n- 不执行 Git Push。\n- 不进行正式比赛提测。\n- 不修改官方测试。\n- 不删除或覆盖前三阶段代码和证据。\n- 不强制重置 Git。\n- 不编造测试结果。\n- 正确性优先于性能。\n- 未验证的功能明确标记为未验证。\n\n## 九、完成标准\n\n1. Rust 编译、单测通过。\n2. Docker 构建成功。\n3. 官方握手通过。\n4. 4 个向量公开用例全部通过。\n5. 官方 20 个公开用例全部通过。\n6. 独立向量一致性测试通过。\n7. 提供初步性能测量与下一阶段优化计划。\n8. 用中文提交完整验收报告，列出所有修改、测试结果、原始证据路径和剩余风险。\n\n本阶段达到以上标准后停止，不自动开始第五阶段性能重构或正式提测。\n",
+        "origin": {
+          "type": "matched_agent_draft",
+          "chat": "总结题目与做法",
+          "message_id": "fac77722-36d6-44da-9f9c-4f78bc2fae1c",
+          "matched_lines": 83,
+          "excerpt": "继续 OceanBase 2026 MiniVectorDB 比赛项目，开始第四阶段：向量检索、索引维护与完整公开回归。",
+          "excerpt_description": "仅为原始 Agent 草稿中与用户 Prompt 匹配的一行"
+        },
+        "source_message_role": "user"
+      },
+      "report": {
+        "role": "agent",
+        "id": "msg_0f70b128ebcc85f3016af31393e45487d08e1678f57bda4ce0",
+        "text": "**第四阶段验收通过。** `minivectordb:latest` 从源码无缓存构建成功，官方 `handshake-only`、4 个向量单项和 **20/20 个公开用例**全部通过。独立向量一致性和超内存扫描测试也已通过。**ANN 模式目前使用精确扫描保底，尚无物理 ANN 索引或检索加速。**\n\n[中文验收报告 PDF](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage4-report/build/main.pdf) · [LaTeX 主文件](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage4-report/main.tex) · [排版配置](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage4-report/common.tex)。两页均已渲染检查。可在源目录运行 `latexmk -xelatex -output-directory=build main.tex` 重建。\n\n### 实现与文件\n\n- [parser.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/parser.rs) 增加 `CREATE VECTOR INDEX` 和 `ORDER BY L2_DISTANCE(...)`，保留距离别名支持。\n- [schema.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/schema.rs) 直接将十进制输入转换为 float32，统一拒绝维度错误、NaN、Infinity 和转换溢出。索引定义随表结构持久化。\n- [executor.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/executor.rs) 对事务可见数据流式扫描，先过滤，再按实际存储的 float32 分量计算欧氏距离。有 `LIMIT` 时只保留前 K 个候选，距离并列按主键升序。\n- [error.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/error.rs) 增加索引重名错误。[main.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/main.rs) 明确 exact 和 ann 共用精确路径。\n- 新增 [vector_validation.py](/home/yaoyi0125/projects/seekdb/minivectordb/tests/vector_validation.py)，以 Python `math.dist` 和独立的 float32 参考值校验距离与排序。\n\n### 实测与复测\n\n| 检查 | 结果 |\n|---|---|\n| `cargo check --locked`、`cargo test --locked`、`cargo build --locked` | 均退出 `0`，**12 项单测通过**。[Rust 日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/rust-validation.log) |\n| `docker build --no-cache -t minivectordb` | 退出 `0`，完整命令和基础镜像参数已记录。[构建日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/official-UrPx6j/build.log) |\n| 官方握手、四项向量用例、完整公开回归 | 六次官方驱动运行均退出 `0`，六份 `result.json` 均为 `passed: true`。各次命令、原始 stdout 和 stderr 单独保存。[官方汇总](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/official-fBGoJB/summary.log) · [20 项结果](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/official-fBGoJB/full-public/report/result.json) |\n| 独立向量一致性 | 退出 `0`。覆盖并列、过滤后不足 K、空集、float32 边界和非法值、向量更新、删除后复用主键、事务读己之写及回滚。提交后强杀退出 `137`，重启后两种模式均与参考结果一致，索引定义仍可查验。[独立测试日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/independent-GsJ5OG/consistency.log) |\n\n初始单测复现了索引 DDL 和直接距离排序缺失。边界测试还发现，先将十进制数读成 float64 再转 float32 会在舍入中点附近得到错误结果，改为直接转换后复测通过。首轮官方结果通过，但同名容器重启覆盖了早期 stdout。改用追加采集后重新执行全部官方检查，并确认索引维护用例的原始流保留了两次 `ready`。 [初始失败记录](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/rust-red.log) · [舍入问题复现](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/float32-probe.log)\n\n### 性能基线与下一步\n\n64 MiB 容器完成了 **83,939,480 字节**表上的向量 TopK，表大小包含每行 1 MiB 的标量负载。TopK 与参考校验合计 **45.55 ms**，进程峰值 RSS **4,488 KiB**。 [超内存扫描数据](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/independent-GsJ5OG/vector/oversized.json)\n\n合成基线实际完成 **10,000 条、128 维、1,000 次查询、K=10**，前 5 次查询与独立参考逐项核对。以下是本机实测，官方 benchmark 和隐藏用例尚未运行。 [原始性能数据与逐次耗时](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/independent-GsJ5OG/performance/benchmark.json)\n\n| 指标 | 10 次单行向量更新 | 1,000 次精确查询 |\n|---|---:|---:|\n| 请求中位耗时 | 102.67 ms | 41.39 ms |\n| 请求 P95 | 107.22 ms | 46.33 ms |\n| 进程逻辑读 | 66.59 MB | 6.66 GB |\n| 进程存储写 | 65.95 MB | 0 |\n\n性能进程峰值 RSS 为 **3,496 KiB**。查询阶段存储读计数为零，逻辑读仍达到 6.66 GB，符合热缓存下重复全表扫描的表现。10 次单行更新写入约 10 份表文件。下一阶段优先评估**带提交标记和检查点的有界增量日志**。分段存储可缩小重写范围，但需要合并、墓碑和版本去重。页式存储支持局部更新，涉及更大的缓存与恢复改造。本轮未启动这些重构。\n\nGit 仍在 `2026-competition-round2`，HEAD 为 `f4d4e26653af823a7601668802f80e374ad6643c`。前三阶段代码和证据均已保留，官方测试及断言保持原样。改动留在工作区，未提交、推送或正式提测。 [最终 Git 状态](/home/yaoyi0125/projects/seekdb/protocol-results/stage4-Bc0Pm1/git-final.log)"
+      }
+    },
+    {
+      "stage": 5,
+      "prompt": {
+        "role": "student",
+        "id": "01a1c589-3325-7dc0-bdc5-cf007f07ba95",
+        "text": "继续 OceanBase 2026 MiniVectorDB 比赛，开始第五阶段：性能优化、可靠性审查与回归验证。\n\n项目目录：\\\n`/home/yaoyi0125/projects/seekdb`\n\n分支：\\\n`2026-competition-round2`\n\n## 一、当前状态\n\n已经完成：\n\n- Rust JSONL 协议与 Docker 构建\n- SQL 执行器\n- 磁盘持久化\n- 显式事务与崩溃恢复\n- 向量精确检索和索引定义维护\n- 官方 20/20 公开用例通过\n- 独立强杀、恢复和超内存扫描测试通过\n\n当前 ANN 模式使用精确扫描，没有实际 ANN 加速。\n\n已测性能：\n\n- 10,000 条记录、128 维、1,000 次 TopK 查询\n- 查询中位耗时 41.39 ms\n- 1,000 次查询累计逻辑读取 6.66 GB\n- 10 次单行向量更新中位耗时 102.67 ms\n- 10 次更新约产生 65.95 MB 写入\n\n## 二、第一任务：保存稳定基线\n\n1. 检查 Git 状态和所有现有改动。\n2. 验证当前代码与第四阶段测试结果对应。\n3. 检查是否有密钥、个人信息、大型测试文件或临时产物被意外纳入 Git。\n4. 在当前分支创建一个本地 Git Commit，保存第四阶段通过测试的源码、Dockerfile、依赖锁文件及必要测试脚本。\n5. 不提交大型原始日志、测试数据或构建缓存。\n6. 不修改官方题包。\n7. 不执行 Git Push。\n8. 记录完整 commit SHA，确保后续优化能够安全回退。\n\n## 三、第二任务：性能基线与问题定位\n\n对当前实现进行只读分析与测量。\n\n重点研究：\n\n1. 全表快照写入放大来自哪些文件操作？\n2. 单次 INSERT、UPDATE、DELETE 的磁盘读写开销分别是多少？\n3. 当前 1,000 次查询的耗时主要来自文件读取、JSON 解码、向量距离计算还是排序？\n4. Linux 页缓存对实测性能有多大影响？\n5. 当前事务发布方案是否存在尚未覆盖的崩溃时序？\n6. 当前数据规模超过内存限额时是否仍有隐藏的大对象分配？\n\n必须区分：\n\n- 实际测量\n- 理论估算\n- 尚未验证的假设\n\n对相同工作负载重复测量，记录结果。\n\n## 四、第三任务：研究优化方案\n\n分别评估两条技术路线。\n\n### A. 写入优化\n\n研究：\n\n- 追加式增量日志\n- 分段数据文件\n- 有界缓存\n- 后台或显式检查点\n- 墓碑及版本管理\n\n分析它们对以下性质的影响：\n\n- 事务原子性\n- 已确认提交的持久性\n- 崩溃恢复幂等性\n- 磁盘 I/O\n- 文件增长\n- 内存上限\n\n### B. 查询优化\n\n研究：\n\n- 紧凑的向量数据存储\n- 避免重复解析完整标量记录\n- 有界 TopK\n- 向量缓存\n- 自行实现适合本题规模的 ANN 索引\n\n重点考虑 10,000 条、128 维、K=10、一半查询带普通列过滤的工作负载。\n\n不得使用 Faiss、HNSWlib 等禁止的现成向量索引库。\n\nexact 必须始终保持精确语义。\n\nann 必须保证：\n\n- 有效 ID\n- 无重复\n- 满足 WHERE 条件\n- 事务可见性一致\n- 插入、更新、删除后索引一致\n- Recall@10 满足正式要求\n\n对于过滤后的候选集，应在过滤集合内计算真值。不能先取得全表近似 TopK 再过滤。\n\n## 五、第四任务：分步实施\n\n先选择一个经测量证明具有较高收益、较低正确性风险的优化。\n\n要求：\n\n1. 修改前保存基线性能数据。\n2. 只处理一个主要瓶颈。\n3. 修改后运行 Rust 编译和单元测试。\n4. 重新构建 Docker 镜像。\n5. 运行官方 handshake-only。\n6. 运行全部 20 个公开用例。\n7. 重新运行独立故障恢复测试。\n8. 对照优化前后耗时、I/O 和内存。\n9. 如果性能恶化或正确性回归，定位原因，不得强行保留优化。\n10. 完成第一项优化并验收后，再决定是否实施下一项。\n\n禁止一次性重写存储、事务和向量索引三个子系统。\n\n## 六、第五任务：隐藏测试风险审查\n\n重点检查：\n\n1. float32 转换和距离精度。\n2. BIGINT 极值及排序。\n3. Unicode VARCHAR 长度。\n4. 多行 INSERT 失败原子性。\n5. 显式事务中失败语句后的继续执行。\n6. 向量查询的事务可见性。\n7. 提交成功后立即强杀。\n8. 恢复途中再次强杀。\n9. 索引更新和删除后的一致性。\n10. 大于内存限额的数据集。\n11. 查询结果大小、排序及 LIMIT 边界。\n12. JSONL 请求 ID 精度和输出 flush。\n\n独立测试不能直接以被测数据库的实现结果充当唯一参考真值。\n\n## 七、性能验收\n\n使用与官方公布规模一致的本地基准：\n\n- 10,000 条记录\n- 128 维向量\n- 1,000 次查询\n- K=10\n- 一半带普通列过滤\n\n写入按官方每批 100 条提交的方式进行。\n\n分别记录：\n\n- 写入总时间\n- 查询总时间\n- 每请求耗时分布\n- 磁盘 I/O\n- 容器峰值内存\n- 无过滤 Recall@10\n- 带过滤 Recall@10\n\nRecall@10 两组均应不低于 0.95。\n\n尽可能使用 Linux cgroup v2 的 io.stat 和 memory.peak，与正式统计口径对齐。\n\n如不能复现正式统计环境，明确注明与官方 benchmark 的区别。\n\n不得伪造性能基线、召回率或提升百分比。\n\n## 八、Agent 学习证据\n\n真实保存本次优化的：\n\n- 技术问题\n- 方案对比\n- 预测与实际测量\n- 失败与修正\n- 性能取舍\n- 局限分析\n- 复测结果\n\n明确区分学生、Agent 和工具贡献。\n\n不得把 Agent 自动生成的分析冒充学生独立理解。\n\n## 九、限制\n\n- 不执行 Git Push。\n- 不正式提测。\n- 不修改官方题包。\n- 不删除前三、四阶段的证据。\n- 不强制重置 Git。\n- 不牺牲 SQL、事务或恢复正确性来优化性能。\n- 未验证的优化不得宣称成功。\n- 不提交或保存任何访问密钥。\n- 避免进行无必要的系统级配置修改。\n\n## 十、交付\n\n完成后输出中文报告，包含：\n\n1. 稳定基线的本地 commit SHA。\n2. 性能瓶颈分析。\n3. 选择的优化方案及技术理由。\n4. 实际修改文件。\n5. 优化前后的性能对比。\n6. 官方 20 个用例的回归结果。\n7. 独立崩溃恢复和资源测试结果。\n8. 实际 Recall@10。\n9. 已知限制和隐藏测试风险。\n10. 下一阶段具体建议。\n\n本轮以正确性和有测量依据的性能改进为目标，不执行 Git Push 或正式比赛提交。\n",
+        "origin": {
+          "type": "matched_agent_draft",
+          "chat": "总结题目与做法",
+          "message_id": "93ca5465-bc94-41c4-b5a8-1ca5e8732b26",
+          "matched_lines": 94,
+          "excerpt": "继续 OceanBase 2026 MiniVectorDB 比赛，开始第五阶段：性能优化、可靠性审查与回归验证。",
+          "excerpt_description": "仅为原始 Agent 草稿中与用户 Prompt 匹配的一行"
+        },
+        "source_message_role": "user"
+      },
+      "report": {
+        "role": "agent",
+        "id": "msg_0f70b128ebcc85f3016af318af459487d0821d122e35a550d6",
+        "text": "**第五阶段验收通过。** 最终镜像 `minivectordb:stage5-final` 通过官方握手、**20/20 公开用例**、独立强杀恢复和超内存扫描。两轮配对基准的混合查询总耗时分别下降 **9.7% 和 2.8%**。过滤查询明显加快，无过滤查询在完整基准中变慢，交错对照波动较大，尚未定位稳定的退化原因。\n\n**第四阶段稳定基线已保存为本地提交 `f0df231b8c8ba5e442ee8172d79b51519314d523`。** 重建镜像的 ID 和程序 SHA-256 均与第四阶段验收记录一致。提交仅包含源码、构建配置、锁文件和必要测试脚本。Git 未配置作者，因此本次提交使用了仅对该命令有效的 Agent 身份。 [基线核验](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/baseline-image.log) · [提交记录](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/baseline-commit.log)\n\n[中文验收报告 PDF](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage5-report/build/main.pdf) · [LaTeX 主文件](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage5-report/main.tex) · [实测数据宏](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage5-report/metrics.tex) · [排版配置](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage5-report/common.tex)。两页均已渲染检查，可用 `latexmk -xelatex -output-directory=build main.tex` 重建。\n\n### 瓶颈与改动\n\n基线热缓存下，宿主机顺序读文件中位耗时为 **0.23–0.45 ms**，容器内解码并做标量过滤为 **35.37–39.36 ms**，向量 TopK 为 **36.41–40.87 ms**。这些探针无法精确拆分各函数的 CPU 时间，但支持优先减少逐行 JSON 解码。对单个测试文件驱逐页缓存后，查询中位耗时增加约 **2.8–3.1 ms**。 [基线探针与 I/O 原始数据](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/baseline-1/result.json)\n\n本轮只改了**向量表的过滤扫描**。先从原始 JSON 字段解码 `WHERE` 所需标量，未命中的行跳过向量解码。首版遇到全命中过滤时，每行重复解码，中位耗时升至约 **64.5 ms**。最终版采样前 32 行，命中超过四分之一时回退到单次完整解码，仍对每行执行 `WHERE`。交错对照中，最终版全命中过滤为 **27.10–27.43 ms**，对应基线为 **27.82–30.74 ms**。 [首版对照](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/ab-control.json) · [最终对照](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/ab-control.json)\n\n改动文件为 [executor.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/executor.rs)、[storage.rs](/home/yaoyi0125/projects/seekdb/minivectordb/src/storage.rs)、[Cargo.toml](/home/yaoyi0125/projects/seekdb/minivectordb/Cargo.toml) 和新增的 [stage5_benchmark.py](/home/yaoyi0125/projects/seekdb/minivectordb/tests/stage5_benchmark.py)。表文件格式和事务发布路径保持原样。首次编译因借用 JSON 字段与解码函数的生命周期约束不匹配而失败，修正后复测通过。 [编译失败记录](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/rust-validation.log) · [工程记录](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/engineering-notes.txt)\n\n### 性能与召回率\n\n本地合成基准前后各跑两轮，每轮 **10,000 条、128 维、每批 100 条提交、1,000 次 K=10 查询**，其中 500 次带过滤，命中全表的 1/16。下表为两轮实测范围。\n\n| 指标 | 基线 | 最终优化 |\n|---|---:|---:|\n| 批量写入总耗时 | 5.35–5.47 s | 5.41–5.79 s |\n| 混合查询总耗时 | 36.73–39.34 s | **35.52–35.70 s** |\n| 过滤查询中位数 / P95 | 35.64–38.41 / 40.11–43.01 ms | **29.30–29.59 / 32.42–32.80 ms** |\n| 无过滤查询中位数 / P95 | 37.18–39.88 / 42.20–44.50 ms | 41.55–41.87 / 45.62–45.86 ms |\n| 容器峰值内存 | 14.83–15.72 MiB | 15.41–15.61 MiB |\n\n四轮的无过滤与带过滤 **Recall@10 均为 1.00**，平均值和最小值均达到 0.95。全部查询用独立 Python 暴力搜索核验，过滤组在过滤集合内计算真值。当前 ANN 请求仍走精确保底路径。 [基线第 1 轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/baseline-1/result.json) · [基线第 2 轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/baseline-2/result.json) · [优化第 1 轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/optimized-1/result.json) · [优化第 2 轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/optimized-2/result.json)\n\n四轮的 cgroup v2 批量写入量均为 **339,845,120 字节**，查询阶段物理读写计数为零，进程逻辑读均为 **6,792,851,648 字节**。基线单行 `INSERT`、`UPDATE`、`DELETE` 的中位开销各约为 **6.79 MB 逻辑读和 6.73 MB 存储写**。主要开销来自扫描旧表并写出、同步整张替换表。以上为本地 WSL 容器测量，正式 benchmark 和隐藏用例尚未运行。\n\n### 回归、风险与下一步\n\n- **最终回归通过。** `cargo check`、`cargo test`、`cargo build` 均带 `--locked` 并退出 `0`，**14 项单测通过**。无缓存 Docker 构建成功，官方握手和完整公开报告均为 `passed: true`。 [Rust 日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/rust-adaptive.log) · [镜像构建](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/build.log) · [握手报告](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/handshake/result.json) · [20 项结果](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/full-public/result.json)\n- **独立故障和边界测试通过。** 覆盖提交应答前后强杀、恢复中再次强杀、事务及向量可见性、64 MiB 容器扫描约 80 MiB 的向量表，以及 BIGINT 极值、Unicode 长度、失败语句原子性、`LIMIT 0/1` 和超大整数 JSONL ID。 [故障日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/fault.log) · [向量与资源日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/vector.log) · [边界日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/adaptive/boundaries.log)\n- **剩余风险。** 超大输入行、单条记录和大批量插入仍可能形成大对象，查询预算也可能晚于驱动的 16 MiB 响应限制。最后一张快照安装后、清除提交目录前的独立强杀点，以及磁盘满和同步失败，尚未单独注入验证。采样也可能误判分布不均的过滤条件。\n- **下一阶段建议。** 先用独立原型验证带提交标记、校验和与原子检查点的**有界增量日志**，以单行写入的 `io.stat` 和故障恢复作为验收门槛。分段存储可缩小重写范围，但需处理墓碑和版本合并。页式存储可局部更新，恢复改造更大。查询侧可随后验证紧凑向量列和有界缓存，再评估自建 ANN。\n\n当前分支仍为 `2026-competition-round2`。优化留在工作区，官方题包与既有证据已保留。未 Push、未正式提测，也未启动下一项优化。 [最终 Git 状态](/home/yaoyi0125/projects/seekdb/protocol-results/stage5-YTCElg/git-final.log)"
+      }
+    },
+    {
+      "stage": 6,
+      "prompt": {
+        "role": "student",
+        "id": "01a1c59b-1883-7cc1-b763-e8feac029c10",
+        "text": "继续 OceanBase 2026 MiniVectorDB 比赛项目。\n\n当前项目：\\\n`/home/yaoyi0125/projects/seekdb`\n\n分支：\\\n`2026-competition-round2`\n\n当前状态：\n\n- Stage 1–5 已完成。\n- 官方 20/20 公开用例通过。\n- 强杀恢复、事务一致性和超内存扫描测试通过。\n- 当前 Docker 镜像为 minivectordb。\n- Stage 4 稳定基线提交为 f0df231b8c8ba5e442ee8172d79b51519314d523。\n- Stage 5 查询优化仍在未提交工作区中。\n- 尚未 Git Push 或正式比赛提测。\n\n本轮进入第六阶段：增量存储原型、性能验证与可靠性分析。\n\n## 任务一：保存第五阶段稳定版本\n\n1. 检查当前工作区和第五阶段全部修改。\n2. 核对 Stage 5 的官方 20/20 回归报告、镜像和源码版本。\n3. 在不包含大型日志、构建缓存、敏感凭据的前提下，创建 Stage 5 本地 Git Commit。\n4. 记录完整 commit SHA。\n5. 如需配置 Git 作者，使用经我确认的身份，不擅自使用 Agent 身份作为我的个人身份。\n6. 不执行 Git Push。\n7. 在正式修改存储引擎前，保留可恢复的稳定版本。\n\n## 任务二：独立验证当前性能问题\n\n首先不要修改正式数据库核心。\n\n分析并测量：\n\n1. 为什么无过滤查询在第五阶段变慢？\n2. 当前过滤路径的采样与回退是否产生额外开销？\n3. 是否存在重复 JSON 解码、数据复制或额外分支判断？\n4. 查询性能是否受到页缓存、CPU 调度、测试顺序影响？\n5. 写入放大有多少来自整表重写、fsync、目录发布和文件复制？\n\n用交错 A/B 测试和重复测量验证结论。\n\n分别记录：\n\n- 带过滤查询\n- 无过滤查询\n- 混合查询\n- 批量插入\n- 单行更新\n- 单行删除\n- 磁盘 I/O\n- 容器内存峰值\n\n不得将不稳定的性能差异解释为确定性的改善。\n\n## 任务三：设计有界增量存储原型\n\n在独立实验目录中实现原型，避免立即替换现有数据库。\n\n建议研究追加式记录日志与检查点方案，但允许根据测量结果选择更合理的设计。\n\n必须明确：\n\n1. 表记录和元数据如何组织。\n2. INSERT、UPDATE、DELETE 如何记录。\n3. 主键重复及记录版本如何处理。\n4. 显式事务如何保证原子性。\n5. 自动提交如何保证持久化。\n6. 提交标记及完整性校验如何设计。\n7. 检查点如何原子发布。\n8. 日志如何截断、回收和限制空间增长。\n9. 内存缓存如何设置上限。\n10. 向量索引与当前可见记录如何保持一致。\n11. 读己之写和 ROLLBACK 如何实现。\n12. 恢复中再次强杀如何保证幂等。\n\n必须考虑进程异常终止和持久化顺序，明确文件及目录 fsync 的必要性与平台约束。\n\n不允许使用 SQLite、RocksDB 或现成向量数据库引擎。\n\n## 任务四：独立原型测试\n\n使用独立数据目录进行测试。\n\n必须包含：\n\n1. 自动提交后的正常重启。\n2. 提交成功后立即强杀。\n3. 未提交事务强杀。\n4. 多表事务的原子提交。\n5. 语句失败后的事务继续执行。\n6. 日志尾部不完整。\n7. 检查点发布前、中、后的强杀。\n8. 恢复过程中再次强杀。\n9. 重复恢复不导致重复记录。\n10. 大于内存预算的数据集。\n11. 向量更新、删除与事务可见性。\n12. 磁盘空间不足或写入失败时的安全处理。\n\n与 Stage 5 原存储方案使用相同数据和负载测量性能。\n\n## 任务五：决定是否集成\n\n只有在独立原型证明以下条件后，才允许开始集成：\n\n- 正确性不低于现有实现。\n- 崩溃恢复得到独立验证。\n- 写入 I/O 获得明确改善。\n- 内存和磁盘使用可控。\n- 不造成无法接受的查询性能退化。\n\n如果证据不足，本轮只提交原型与技术分析，不替换正式存储引擎。\n\n如决定集成，必须先报告具体迁移方案、影响文件、回滚方法和风险；未经我下一轮明确授权，不执行正式存储引擎替换。\n\n## 任务六：完整验收与记录\n\n对正式 Stage 5 实现维持独立回归基线。\n\n若只开发原型，不得把原型测试结果冒充正式数据库通过。\n\n保存：\n\n- 编译及单元测试\n- Docker 构建\n- 官方 20 个公开用例\n- 独立崩溃测试\n- 资源测量\n- 增量日志实验结果\n- 失败原因与复测\n- 原型与基线对照数据\n\n保留真实学生问题、Agent 建议、工具结果与实验反思的来源区分，不编造学生理解或已执行的实验。\n\n## 工作纪律\n\n- 不执行 Git Push。\n- 不正式提测。\n- 不修改官方协议、测试脚本或预期结果。\n- 不删除历史证据。\n- 不强制重置 Git。\n- 不进行未经验证的大规模重构。\n- 不牺牲事务、恢复与数据一致性换取性能。\n- 所有性能改善都必须有实际测量支持。\n\n## 最终交付\n\n用中文报告：\n\n1. Stage 5 稳定 commit SHA。\n2. 无过滤查询退化原因及验证结果。\n3. 原存储引擎性能基线。\n4. 增量存储方案和原型设计。\n5. 原型实际测试结果。\n6. 写入、查询、I/O、内存对比。\n7. 崩溃恢复验证证据。\n8. 是否建议替换现有存储引擎。\n9. 替换所需工作量、风险和回滚方案。\n10. 下一阶段行动建议。\n\n本轮以完成可靠的增量存储原型和集成决策为目标。未经下一轮确认，不将原型替换为正式数据库引擎。\n",
+        "origin": {
+          "type": "matched_agent_draft",
+          "chat": "总结题目与做法",
+          "message_id": "8166ae0e-2829-47ec-8256-cd5819fc6f78",
+          "matched_lines": 84,
+          "excerpt": "继续 OceanBase 2026 MiniVectorDB 比赛项目。",
+          "excerpt_description": "仅为原始 Agent 草稿中与用户 Prompt 匹配的一行"
+        },
+        "source_message_role": "user"
+      },
+      "report": {
+        "role": "agent",
+        "id": "msg_0f70b128ebcc85f3016af31cd2463c87d0aa75ebc4878dcf5b",
+        "text": "**第六阶段的独立原型、性能复测和集成评估已完成。结论是暂不替换正式存储引擎。** 原型显著减少了写入，但同规模查询约慢四倍，尚未达到集成门槛。正式数据库核心保持原样。\n\n**Stage 5 稳定提交仍暂停。** GitHub CLI 已确认登录账号为 `yy200512`，但仓库未配置邮箱，账号没有公开邮箱，当前凭据也无法读取已验证邮箱列表。我保留了 Stage 5 的四个变更文件，并核对了源码哈希及验收镜像。HEAD 仍是 Stage 4 的 `f0df231b8c8ba5e442ee8172d79b51519314d523`。请提供 GitHub 设置中确认的提交邮箱或页面显示的 noreply 地址。收到后可只配置当前仓库，并创建 Stage 5 本地提交。 [可恢复快照](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/stage5-recovery) · [最终 Git 状态](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/git-final.log)\n\n[中文实验报告 PDF](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage6-report/build/main.pdf) · [LaTeX 主文件](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage6-report/main.tex) · [数据宏](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage6-report/metrics.tex) · [排版配置](C:/Users/yaoyi/.codex/visualizations/2026/11/10/01a1c552-39fc-7502-9a3a-b9d14d1207a2/minivectordb-stage6-report/common.tex)。三页均已渲染检查。\n\n### 正式引擎复测\n\n按 Stage 4 → Stage 5 → Stage 5 → Stage 4 交错运行，每轮 10,000 条、128 维、每批 100 条提交、1,000 次 TopK，半数查询带过滤。Stage 5 的过滤查询中位数从 **22.49–23.64 ms** 降至 **18.59–18.79 ms**，无过滤中位数从 **23.24–24.33 ms** 升至 **26.57–26.83 ms**。混合查询总耗时区间重叠，本轮没有复现稳定的混合负载收益。 [Stage 4 两轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/ab-1/result.json) · [Stage 4 第 2 轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/ab-4/result.json) · [Stage 5 第 1 轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/ab-2/result.json) · [Stage 5 第 2 轮](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/ab-3/result.json)\n\n无过滤请求会跳过采样和原始字段预读。有过滤时，通过预读的行仍需完整解码，高命中才会切回单次解码。固定 CPU、轮换顺序的隔离实验中，四个变体的无过滤耗时区间重叠，物理读均为零。仅启用 `raw_value` 的镜像也有轻微变慢，去掉动态迭代器没有稳定恢复性能。**编译特性及代码生成值得继续调查，现有证据不足以确认完整负载退化的单一原因。** 单文件冷读实验另测得 Stage 5 查询中位耗时比热读增加约 **1.9 ms**。 [隔离诊断原始数据](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/diagnostics-retry/query-ab.json)\n\n单行 `INSERT`、`UPDATE`、`DELETE` 各追踪三次，每次约读取 **6.79 MB**、写出 **6.73 MB**。文件 `fsync` 中位耗时 **5.69–6.30 ms**，四次目录 `fsync` 合计 **3.27–3.89 ms**，三次重命名合计 **0.34–0.35 ms**。整表替换贡献了主要写入字节，目录发布贡献的是延迟。其余请求时间包含解码、编码、协议和调度，探针未进一步拆分。 [系统调用采样](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/diagnostics-retry/trace/result.json)\n\n### 增量原型与实测\n\n原型将每个事务写为一个带长度、CRC32、序号和提交标记的 WAL 帧，文件同步后才确认。失败语句不合并到事务暂存区，删除用墓碑遮蔽旧版本。检查点流式归并 32 个有序分片，先同步新一代文件，再原子发布并同步 `CURRENT`，最后回收 WAL。恢复按水位跳过已覆盖帧并截断不完整尾部。默认 WAL 上限 **4 MiB**，单帧上限 **512 KiB**，每个映射最多 **4,096 个键**。向量查询读取事务可见行，原型没有物理向量索引。 [设计与复现说明](/home/yaoyi0125/projects/seekdb/experiments/stage6_incremental/README.md) · [实现](/home/yaoyi0125/projects/seekdb/experiments/stage6_incremental/store.py) · [测试](/home/yaoyi0125/projects/seekdb/experiments/stage6_incremental/test_store.py) · [基准脚本](/home/yaoyi0125/projects/seekdb/experiments/stage6_incremental/benchmark.py)\n\n| 同一合成负载 | 正式 Stage 5，两轮 | 独立原型，一轮 |\n|---|---:|---:|\n| 100 批写入总耗时 | 3.78–3.81 s | 1.83 s |\n| 批量写入物理写量 | 339.85 MB | 9.07 MB |\n| 单行插入、更新、删除的物理写中位量 | 各约 6.73 MB | 各 4 KiB |\n| 1,000 次混合查询总耗时 | 23.19–24.23 s | 95.20 s |\n| 容器峰值内存 | 15.04–15.29 MiB | 45.54 MiB |\n| 带过滤 / 无过滤 Recall@10 | 1.00 / 1.00 | 1.00 / 1.00 |\n\n原型批量写入已包含自动检查点。再计入一次显式检查点，写入量约 **13.02 MB**，仍比正式存储少约 **96%**。原型使用 Python 记录接口，正式引擎使用 Rust JSONL，查询差距不能直接归因给 WAL 设计。 [原型逐请求耗时与 cgroup 数据](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/prototype-benchmark/result.json)\n\n### 验证与集成门槛\n\n- **正式 Stage 5** 重新通过 Rust 编译检查、构建、14 项单测、Docker 构建、官方握手、20/20 公开用例，以及独立强杀和超内存向量扫描。 [Rust 日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/formal-rust.log) · [Docker 构建](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/build.log) · [官方报告](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/full-public/result.json) · [故障复测](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/fault.log)\n- **独立原型** 在 64 MiB 容器通过 **11 项测试**，覆盖多表原子提交、失败语句后继续、已确认与未提交强杀、检查点发布前中后强杀、恢复再次强杀、截断尾部和重复恢复。短写 ENOSPC、检查点失败和 `fsync` EIO 采用故障注入。超内存数据集为 **75,508,971 字节**，进程峰值 RSS **34,092 KiB**。断电与设备损坏尚未验证。首次宿主机烟雾测试的日志写入被目录权限阻止，完整容器复测已成功保存。 [原型测试日志](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/prototype-tests.log) · [过程记录](/home/yaoyi0125/projects/seekdb/protocol-results/stage6-U9uHyK/engineering-notes.txt)\n- **下一步**是在 Rust 中做可选后端原型，用同一 SQL 和 JSONL 路径复测查询，再决定是否迁移。预计涉及存储、事务接口、执行器和差分测试，粗估一至两周，需用 Rust 原型重新校准。迁移应离线写入新目录并逐表核验，保留旧快照和旧镜像。新引擎接收写入后，回滚还需要验证增量回放或反向迁移，才能保住新数据。\n\n官方题包与历史证据均已保留。未替换引擎、未 Push、未正式提测。"
+      }
+    }
+  ],
+  "tool_outputs": [
+    {
+      "id": "stage1-handshake",
+      "role": "tool",
+      "path": "protocol-results/handshake-command-final.log",
+      "lines": [
+        {
+          "line": 2,
+          "text": "handshake: PASS "
+        },
+        {
+          "line": 4,
+          "text": "Official handshake exit: 0"
+        },
+        {
+          "line": 7,
+          "text": "  \"passed\": true,"
+        }
+      ]
+    },
+    {
+      "id": "stage2-sql",
+      "role": "tool",
+      "path": "protocol-results/stage2-vZvgOW/docker-wIHmrO/summary.log",
+      "lines": [
+        {
+          "line": 1,
+          "text": "handshake: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/handshake/result.json"
+        },
+        {
+          "line": 2,
+          "text": "sql_crud: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_crud/result.json"
+        },
+        {
+          "line": 3,
+          "text": "sql_bigint: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_bigint/result.json"
+        },
+        {
+          "line": 4,
+          "text": "sql_comparisons: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_comparisons/result.json"
+        },
+        {
+          "line": 5,
+          "text": "sql_empty: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_empty/result.json"
+        },
+        {
+          "line": 6,
+          "text": "sql_ordering: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_ordering/result.json"
+        },
+        {
+          "line": 7,
+          "text": "sql_primary_key: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_primary_key/result.json"
+        },
+        {
+          "line": 8,
+          "text": "sql_unicode: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_unicode/result.json"
+        },
+        {
+          "line": 9,
+          "text": "sql_unsupported: passed=True  protocol-results/stage2-vZvgOW/docker-wIHmrO/sql_unsupported/result.json"
+        }
+      ]
+    },
+    {
+      "id": "stage3-recovery",
+      "role": "tool",
+      "path": "protocol-results/stage3-Do9zJb/fault-run-AhLstH/command.log",
+      "lines": [
+        {
+          "line": 24,
+          "text": "container exit: 0"
+        },
+        {
+          "line": 26,
+          "text": "container exit: 0"
+        },
+        {
+          "line": 27,
+          "text": "PASS: confirmed autocommit, abandoned transaction, confirmed multi-table commit, unacknowledged commit, recovery interrupted, torn unpublished files, and repeated recovery"
+        },
+        {
+          "line": 29,
+          "text": "container exit: 0"
+        },
+        {
+          "line": 31,
+          "text": "container exit: 0"
+        },
+        {
+          "line": 32,
+          "text": "PASS: bounded-memory write, restart and scan {\"rows\": 80, \"docker_memory_limit_bytes\": 67108864, \"dataset_bytes\": 83888444, \"allocated_disk_bytes\": 83890176, \"files\": 2, \"write_process\": {\"VmHWM_kib\": 16764, \"VmRSS_kib\": 9708, \"memory.max\": 67108864, \"memory.peak\": 67108864, \"read_bytes\": 655912960, \"write_bytes\": 964825088}, \"read_process\": {\"VmHWM_kib\": 5408, \"VmRSS_kib\": 5408, \"memory.max\": 67108864, \"memory.peak\": 59424768, \"read_bytes\": 49278976, \"write_bytes\": 0}}"
+        },
+        {
+          "line": 33,
+          "text": "exit: 0"
+        }
+      ]
+    },
+    {
+      "id": "stage4-regression",
+      "role": "tool",
+      "path": "protocol-results/stage4-Bc0Pm1/official-fBGoJB/summary.log",
+      "lines": [
+        {
+          "line": 1,
+          "text": "full-public True 20 protocol-results/stage4-Bc0Pm1/official-fBGoJB/full-public/report/result.json"
+        }
+      ]
+    },
+    {
+      "id": "stage4-float32",
+      "role": "tool",
+      "path": "protocol-results/stage4-Bc0Pm1/float32-probe.log",
+      "lines": [
+        {
+          "line": 14,
+          "text": "  left: 1065353216"
+        },
+        {
+          "line": 15,
+          "text": " right: 1065353217"
+        },
+        {
+          "line": 25,
+          "text": "exit: 101"
+        }
+      ]
+    },
+    {
+      "id": "stage5-first-ab",
+      "role": "tool",
+      "path": "protocol-results/stage5-YTCElg/ab-control.log",
+      "lines": [
+        {
+          "line": 3,
+          "text": "stage5-baseline {'unfiltered': 39.39010300109658, 'WHERE bucket >= 0': 38.81821199956903, 'WHERE bucket = 0': 38.0395239990321}"
+        },
+        {
+          "line": 6,
+          "text": "stage5 {'unfiltered': 41.16346449973207, 'WHERE bucket >= 0': 64.52633749995584, 'WHERE bucket = 0': 28.65164000013465}"
+        },
+        {
+          "line": 9,
+          "text": "stage5 {'unfiltered': 39.36001749934803, 'WHERE bucket >= 0': 64.48937049935921, 'WHERE bucket = 0': 28.15889999965293}"
+        },
+        {
+          "line": 12,
+          "text": "stage5-baseline {'unfiltered': 39.86294249898492, 'WHERE bucket >= 0': 43.605936999483674, 'WHERE bucket = 0': 38.56368300057511}"
+        }
+      ]
+    },
+    {
+      "id": "stage5-final-ab",
+      "role": "tool",
+      "path": "protocol-results/stage5-YTCElg/adaptive/ab-control.log",
+      "lines": [
+        {
+          "line": 3,
+          "text": "stage5-baseline {'unfiltered': 42.68582249915198, 'WHERE bucket >= 0': 30.74120550081716, 'WHERE bucket = 0': 27.350964499419206}"
+        },
+        {
+          "line": 6,
+          "text": "stage5-final {'unfiltered': 27.956562499639404, 'WHERE bucket >= 0': 27.431818000877684, 'WHERE bucket = 0': 18.40863849974994}"
+        },
+        {
+          "line": 9,
+          "text": "stage5-final {'unfiltered': 27.731583500099077, 'WHERE bucket >= 0': 27.099160500256403, 'WHERE bucket = 0': 19.71514799970464}"
+        },
+        {
+          "line": 12,
+          "text": "stage5-baseline {'unfiltered': 26.564955500361975, 'WHERE bucket >= 0': 27.824690499983262, 'WHERE bucket = 0': 27.665671999784536}"
+        }
+      ]
+    },
+    {
+      "id": "stage6-prototype",
+      "role": "tool",
+      "path": "protocol-results/stage6-U9uHyK/prototype-tests.log",
+      "lines": [
+        {
+          "line": 12,
+          "text": "test_wal_bounds_and_large_dataset (__main__.StoreTests.test_wal_bounds_and_large_dataset) ... large_dataset {\"disk_bytes\": 75508971, \"process_peak_rss_kib\": 34092}"
+        },
+        {
+          "line": 16,
+          "text": "Ran 11 tests in 3.531s"
+        },
+        {
+          "line": 19,
+          "text": "exit: 0"
+        }
+      ]
+    },
+    {
+      "id": "stage6-performance",
+      "role": "tool",
+      "path": "protocol-results/stage6-U9uHyK/prototype-benchmark.log",
+      "lines": [
+        {
+          "line": 11,
+          "text": "queries completed 1000"
+        },
+        {
+          "line": 12,
+          "text": "{\"dataset\": {\"rows\": 10000, \"dimensions\": 128, \"queries\": 1000, \"batch\": 100, \"k\": 10}, \"write\": {\"count\": 100, \"total_ms\": 1831.3727319982718, \"median_ms\": 20.79618650077464, \"p95_ms\": 40.203085000030114}, \"filtered\": {\"count\": 500, \"total_ms\": 42739.98141903576, \"median_ms\": 84.83361799972045, \"p95_ms\": 91.14997799952107}, \"unfiltered\": {\"count\": 500, \"total_ms\": 52463.282586022615, \"median_ms\": 104.14004449921777, \"p95_ms\": 110.92404400005762}, \"query_total_ms\": 95203.26400505837, \"write_io\": {\"rchar\": 407464853, \"wchar\": 8637761, \"read_bytes\": 0, \"write_bytes\": 9068544, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 9068544, \"rios\": 0, \"wios\": 275, \"dbytes\": 0, \"dios\": 0}}}, \"query_io\": {\"rchar\": 3132737201, \"wchar\": 221, \"read_bytes\": 0, \"write_bytes\": 0, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 0, \"rios\": 0, \"wios\": 0, \"dbytes\": 0, \"dios\": 0}}}, \"after_query\": {\"io.stat\": {\"8:48\": {\"rbytes\": 1032192, \"wbytes\": 9072640, \"rios\": 15, \"wios\": 276, \"dbytes\": 0, \"dios\": 0}}, \"memory.peak\": 47751168, \"rchar\": 3541328200, \"wchar\": 8648003, \"read_bytes\": 1032192, \"write_bytes\": 9072640}, \"mutations\": {\"insert\": [{\"ms\": 3.5915039989049546, \"io\": {\"rchar\": 102249, \"wchar\": 435, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}, {\"ms\": 2.941700999144814, \"io\": {\"rchar\": 102119, \"wchar\": 420, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}, {\"ms\": 2.0028170001751278, \"io\": {\"rchar\": 102096, \"wchar\": 437, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}], \"update\": [{\"ms\": 0.8454809994873358, \"io\": {\"rchar\": 4298, \"wchar\": 416, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}, {\"ms\": 0.9766120001586387, \"io\": {\"rchar\": 4298, \"wchar\": 433, \"read_bytes\": 0, \"write_bytes\": 8192, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 8192, \"rios\": 0, \"wios\": 2, \"dbytes\": 0, \"dios\": 0}}}}, {\"ms\": 1.0509950006962754, \"io\": {\"rchar\": 4298, \"wchar\": 410, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}], \"delete\": [{\"ms\": 1.0275990007357905, \"io\": {\"rchar\": 202, \"wchar\": 48, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}, {\"ms\": 0.9234930003003683, \"io\": {\"rchar\": 202, \"wchar\": 48, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}, {\"ms\": 1.5027040008135373, \"io\": {\"rchar\": 202, \"wchar\": 48, \"read_bytes\": 0, \"write_bytes\": 4096, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 4096, \"rios\": 0, \"wios\": 1, \"dbytes\": 0, \"dios\": 0}}}}]}, \"checkpoint_ms\": 75.58577700001479, \"checkpoint_io\": {\"rchar\": 3132940, \"wchar\": 3916647, \"read_bytes\": 0, \"write_bytes\": 3948544, \"io.stat\": {\"8:48\": {\"rbytes\": 0, \"wbytes\": 3948544, \"rios\": 0, \"wios\": 33, \"dbytes\": 0, \"dios\": 0}}}, \"checkpoint_events\": {\"commit_synced\": 110, \"checkpoint_writing\": 3, \"checkpoint_before_publish\": 3, \"checkpoint_published\": 3, \"checkpoint_after_reclaim\": 3}, \"final_disk_bytes\": 3916647, \"peak_rss_kib\": 44176, \"recall_at_10\": {\"filtered\": 1.0, \"unfiltered\": 1.0}}"
+        },
+        {
+          "line": 13,
+          "text": "exit: 0"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "evidence_counts": {
+      "historical_user_prompts": 6,
+      "historical_agent_reports": 6,
+      "tool_output_groups": 9,
+      "matched_agent_drafts": 3,
+      "verified_independent_student_instances": 0
+    },
+    "scoring": "未赋分。未确认学生独立贡献的记录只作为上下文或实验旁证。",
+    "dimensions": [
+      {
+        "dimension": "问题理解与自主拆解",
+        "assessment": "能确认阶段指令由用户发送。Stage 4–6 有对应 Agent 草稿，Stage 1–3 独立撰写来源未验证。",
+        "references": [
+          {
+            "pointer": "/stages/0/prompt/text",
+            "quote": "你现在是 OceanBase 2026 MiniVectorDB 比赛项目的开发助手，请开始第一阶段实际编码。\n\n## 一、项目环境\n\n项目路径：`/home/yaoyi0125/projects/seekdb`\n\nGit 分支：`2026-competition-round2`\n\n官方基线 Commit：\\\n`f4d4e26653af823a7601668802f80e374ad6643c`\n\n"
+          },
+          {
+            "pointer": "/stages/1/prompt/text",
+            "quote": "继续 OceanBase 2026 MiniVectorDB 比赛项目，开始第二阶段：SQL 执行器和内存表存储。\n\n项目目录：\\\n`/home/yaoyi0125/projects/seekdb`\n\n分支：\\\n`2026-competition-round2`\n\n当前已有：\n\n- Rust JSONL 协议实现\n- Dockerfile 和可构建镜像\n- 官方 handshake-only 已通"
+          },
+          {
+            "pointer": "/stages/3/prompt/origin/excerpt",
+            "quote": "继续 OceanBase 2026 MiniVectorDB 比赛项目，开始第四阶段：向量检索、索引维护与完整公开回归。"
+          },
+          {
+            "pointer": "/stages/4/prompt/origin/excerpt",
+            "quote": "继续 OceanBase 2026 MiniVectorDB 比赛，开始第五阶段：性能优化、可靠性审查与回归验证。"
+          },
+          {
+            "pointer": "/stages/5/prompt/origin/excerpt",
+            "quote": "继续 OceanBase 2026 MiniVectorDB 比赛项目。"
+          }
+        ]
+      },
+      {
+        "dimension": "技术理解与迁移",
+        "assessment": "float32 舍入问题有原始失败日志和 Agent 的修复报告；缺学生本人解释、预测或独立迁移记录。",
+        "references": [
+          {
+            "pointer": "/tool_outputs/4/lines/0/text",
+            "quote": "left: 1065353216"
+          },
+          {
+            "pointer": "/stages/3/report/text",
+            "quote": "**第四阶段验收通过。** `minivectordb:latest` 从源码无缓存构建成功，官方 `handshake-only`、4 个向量单项和 **20/20 个公开用例**全部通过。独立向量一致性和超内存扫描测试也已通过。**ANN 模式目前使用精确扫描保底，尚无物理 ANN 索引或检索加速。**\n\n[中文验收报告 PDF](C:/Users/yaoyi/.codex/visualiza"
+          }
+        ]
+      },
+      {
+        "dimension": "独立验证与质疑",
+        "assessment": "有用户发送的独立故障测试要求及工具结果；未核实学生本人设计、执行或质疑结果的原文。",
+        "references": [
+          {
+            "pointer": "/stages/2/prompt/text",
+            "quote": "继续 OceanBase 2026 MiniVectorDB 比赛项目。\n\n项目目录：\\\n`/home/yaoyi0125/projects/seekdb`\n\n当前分支：\\\n`2026-competition-round2`\n\n目前已经完成：\n\n- Rust JSONL 协议\n- Docker 镜像构建\n- 官方 handshake-only 测试\n- 基础 SQL 引擎\n- 8 个公开 SQL "
+          },
+          {
+            "pointer": "/tool_outputs/2/lines/2/text",
+            "quote": "PASS: confirmed autocommit, abandoned transaction, confirmed multi-table commit, unacknowledged commit, recovery interrupted, torn unpublished files, and repeated recovery"
+          }
+        ]
+      },
+      {
+        "dimension": "实验与反馈迭代",
+        "assessment": "高命中过滤的初版退化与采样回退复测是一条 Agent 工程迭代链，缺学生独立判断或复测记录。",
+        "references": [
+          {
+            "pointer": "/tool_outputs/5/lines/1/text",
+            "quote": "stage5 {'unfiltered': 41.16346449973207, 'WHERE bucket >= 0': 64.52633749995584, 'WHERE bucket = 0': 28.65164000013465}"
+          },
+          {
+            "pointer": "/tool_outputs/6/lines/1/text",
+            "quote": "stage5-final {'unfiltered': 27.956562499639404, 'WHERE bucket >= 0': 27.431818000877684, 'WHERE bucket = 0': 18.40863849974994}"
+          },
+          {
+            "pointer": "/stages/4/report/text",
+            "quote": "**第五阶段验收通过。** 最终镜像 `minivectordb:stage5-final` 通过官方握手、**20/20 公开用例**、独立强杀恢复和超内存扫描。两轮配对基准的混合查询总耗时分别下降 **9.7% 和 2.8%**。过滤查询明显加快，无过滤查询在完整基准中变慢，交错对照波动较大，尚未定位稳定的退化原因。\n\n**第四阶段稳定基线已保存为本地提交 `f0df231b8c8ba5e44"
+          }
+        ]
+      },
+      {
+        "dimension": "取舍与反思",
+        "assessment": "WAL 原型的写入收益和查询代价有工具结果及 Agent 结论。缺学生本人基于实测作出的独立取舍与复盘。",
+        "references": [
+          {
+            "pointer": "/tool_outputs/8/lines/1/text",
+            "quote": "{\"dataset\": {\"rows\": 10000, \"dimensions\": 128, \"queries\": 1000, \"batch\": 100, \"k\": 10}, \"write\": {\"count\": 100, \"total_ms\": 1831.3727319982718, \"median_ms\": 20.79618650077464, \"p95_ms\": 40.20308500003"
+          },
+          {
+            "pointer": "/stages/5/report/text",
+            "quote": "**第六阶段的独立原型、性能复测和集成评估已完成。结论是暂不替换正式存储引擎。** 原型显著减少了写入，但同规模查询约慢四倍，尚未达到集成门槛。正式数据库核心保持原样。\n\n**Stage 5 稳定提交仍暂停。** GitHub CLI 已确认登录账号为 `yy200512`，但仓库未配置邮箱，账号没有公开邮箱，当前凭据也无法读取已验证邮箱列表。我保留了 Stage 5 的四个变更文件，并核对了源码"
+          }
+        ]
+      }
+    ]
+  }
+}

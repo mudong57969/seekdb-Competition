@@ -92,6 +92,15 @@ pub struct Schema {
 
 impl Schema {
     pub fn new(columns: Vec<Column>) -> Result<Self, Error> {
+        if columns
+            .iter()
+            .filter(|column| matches!(column.kind, ColumnType::Vector(_)))
+            .nth(1)
+            .is_some()
+        {
+            return Err(Error::InvalidSchema);
+        }
+
         let mut names = HashSet::new();
         let mut primary = None;
         for (index, column) in columns.iter().enumerate() {

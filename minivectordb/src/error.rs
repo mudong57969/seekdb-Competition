@@ -31,7 +31,7 @@ impl Error {
             Self::Unsupported => ("unsupported_sql", "Unsupported SQL"),
             Self::InvalidSchema => (
                 "invalid_schema",
-                "Expected unique columns and one BIGINT primary key",
+                "Expected unique columns, one BIGINT primary key and at most one VECTOR column",
             ),
             Self::IndexExists => ("index_exists", "Index already exists on this table"),
             Self::TableExists => ("table_exists", "Table already exists"),

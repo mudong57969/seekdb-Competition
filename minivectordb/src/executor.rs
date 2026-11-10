@@ -692,6 +692,34 @@ mod vector_tests {
     use serde_json::json;
 
     #[test]
+    fn rejects_second_vector_column_without_creating_a_table() {
+        for explicit in [false, true] {
+            let mut db = Executor::default();
+            if explicit {
+                db.execute("BEGIN").unwrap();
+            }
+            assert_eq!(
+                db.execute("CREATE TABLE t (id BIGINT PRIMARY KEY, a VECTOR(2), label VARCHAR(8), b VECTOR(3))")
+                    .unwrap_err().0,
+                "invalid_schema"
+            );
+            assert_eq!(
+                db.execute("SELECT * FROM t").unwrap_err().0,
+                "unknown_table"
+            );
+            db.execute("CREATE TABLE t (id BIGINT PRIMARY KEY, a VECTOR(2))")
+                .unwrap();
+            if explicit {
+                db.execute("COMMIT").unwrap();
+            }
+            assert_eq!(
+                db.execute("SELECT * FROM t").unwrap()["columns"],
+                json!(["id", "a"])
+            );
+        }
+    }
+
+    #[test]
     fn filter_remains_active_after_sampling_switches_scan_strategy() {
         let mut db = Executor::default();
         db.execute("CREATE TABLE t (id BIGINT PRIMARY KEY, bucket BIGINT, v VECTOR(1))")
