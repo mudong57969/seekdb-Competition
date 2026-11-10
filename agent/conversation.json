@@ -1,10 +1,10 @@
 {
   "format": "minivectordb-learning-material-v1",
   "status": "local_candidate_evidence_insufficient",
-  "scope": "Stage 1–6 项目对话与原始工具输出的选编。audit 为 Stage 7 整理说明，不是历史消息或评分。",
+  "scope": "Stage 1–6 项目对话与原始工具输出的选编。audit 为 Stage 7 整理说明，不是历史消息或评分。 后续手动验证记录见 follow_up；其来源与历史材料分开标注。",
   "provenance": {
     "history": "当前 Codex 项目的六个阶段主指令与各阶段最终回复来自原始消息字段。旁路 ChatGPT 对话只用于核对指令草稿来源。",
-    "omissions": "不包含完整聊天导出、系统指令、工具全部输出、授权回执、无关账号配置及附件。未取得学生独立实验日志或原始个人复盘。",
+    "omissions": "不包含完整聊天导出、系统指令、工具全部输出、授权回执、无关账号配置及附件。未取得学生独立实验日志或原始个人复盘。 后续新增学生事后自述与本人提供的引语；未取得这次实验的完整原始对话和终端流水。",
     "path": "语雀第 4.4 节确认默认读取 agent/conversation.json；公开比赛分支只有根目录占位。根文件保留。私有评测配置或运行时覆盖未核验。",
     "rubric": "已阅读官方语雀赛题第 3.4 和 4.4 节。评审规则为 agent-learning-evidence-v3-unbounded。此文件是学习输入材料，审查清单没有打分。",
     "official_spec": "https://oceanbase.yuque.com/org-wiki-obtech-vh7w9r/hc3pio/lg8enxlmwg69unt6"
@@ -350,9 +350,11 @@
       "historical_agent_reports": 6,
       "tool_output_groups": 9,
       "matched_agent_drafts": 3,
-      "verified_independent_student_instances": 0
+      "verified_independent_student_instances": 0,
+      "follow_up_user_reported_instances": 2,
+      "follow_up_instances_with_independently_checked_outcome_artifact": 1
     },
-    "scoring": "未赋分。未确认学生独立贡献的记录只作为上下文或实验旁证。",
+    "scoring": "未赋分。未确认学生独立贡献的记录只作为上下文或实验旁证。 新增两例按来源标注，未赋分；历史计数 verified_independent_student_instances 不包含后续自述，后续实验全过程仍未独立核实。",
     "dimensions": [
       {
         "dimension": "问题理解与自主拆解",
@@ -437,6 +439,88 @@
           {
             "pointer": "/stages/5/report/text",
             "quote": "**第六阶段的独立原型、性能复测和集成评估已完成。结论是暂不替换正式存储引擎。** 原型显著减少了写入，但同规模查询约慢四倍，尚未达到集成门槛。正式数据库核心保持原样。\n\n**Stage 5 稳定提交仍暂停。** GitHub CLI 已确认登录账号为 `yy200512`，但仓库未配置邮箱，账号没有公开邮箱，当前凭据也无法读取已验证邮箱列表。我保留了 Stage 5 的四个变更文件，并核对了源码"
+          }
+        ]
+      }
+    ]
+  },
+  "follow_up": {
+    "source": {
+      "role": "user",
+      "kind": "本轮用户提交的事后整理和聊天摘录",
+      "original_chat_independently_verified": false,
+      "original_terminal_transcript_available": false
+    },
+    "candidate_commit": "79e135dab0af83945f643aa6d79b46c6c92d26c0",
+    "student_quotes": {
+      "transaction": "我认为commit 是确认并保存修改，然后rollback则是放弃未提交的修改。",
+      "uncommitted_prediction": "bob不应该存在。因为虽然执行了insert，但是没有commit说明没有保存。如果数据库突然崩溃，重新启动后就应该取消这次未完成的操作，恢复到插入 bob之前的状态。",
+      "committed_prediction": "charlie还应该存在，因为一旦commit执行了，说明保存了"
+    },
+    "reported_observations": {
+      "environment": "用户自述在 WSL Ubuntu 用 sudo docker images 确认最终镜像 minivectordb 存在，并亲自运行官方 protocol_check/run.py。实际运行镜像的 ID 与命令流水未取得。",
+      "transaction": "用户自述手动执行 CREATE TABLE、INSERT、SELECT、BEGIN、ROLLBACK、COMMIT。Bob 在回滚后消失，重新插入并提交后保留；正常关闭并重启后，Alice 和 Bob 仍存在。",
+      "vector": "用户自述手动创建 VECTOR(2) 表并插入三个向量，验证 L2_DISTANCE、Top-3、Top-2、Top-1、WHERE 过滤与 ANN 请求接口。用户报告 ANN 请求返回正确结果。",
+      "crash_sequence": "用户自述先独立作出两项预测，再在独立 crash-test-data 目录中插入并自动提交 Charlie，随后 BEGIN 并插入 Bob，未提交。用户在第二个 WSL 终端执行 sudo docker kill --signal=KILL minivectordb-crash-test，重启并查询 crash_students，最后正常 shutdown。",
+      "crash_query": "rows=[[3,\"Charlie\"]]"
+    },
+    "local_checks": [
+      {
+        "role": "tool",
+        "kind": "读取现有公开测试报告",
+        "path": "protocol-results/my-own-test/result.json",
+        "observation": "passed=true；20/20 项 status=PASS。报告可佐证结果，无法仅凭报告核实操作者和执行命令。"
+      },
+      {
+        "role": "tool",
+        "kind": "读取现有持久化表",
+        "path": "crash-test-data/table-crash_students.jsonl",
+        "observation": "现存表仅有一行，id=3，name=Charlie，未发现 Bob。该文件佐证最终磁盘状态；强杀顺序与 SQL 响应仍来自用户事后自述。"
+      }
+    ],
+    "assistant_note": {
+      "role": "assistant",
+      "kind": "本轮整理说明",
+      "text": "ANN 接口返回正确结果只能支持接口验证；当前实现回退到精确扫描。未执行或补造实验，未赋分。"
+    },
+    "instances": [
+      {
+        "dimension": "技术理解与迁移",
+        "scope": "事务含义与手工回滚、提交及正常重启观察；观察为学生事后叙述。",
+        "references": [
+          {
+            "pointer": "/follow_up/student_quotes/transaction",
+            "quote": "我认为commit 是确认并保存修改，然后rollback则是放弃未提交的修改。"
+          },
+          {
+            "pointer": "/follow_up/reported_observations/transaction",
+            "quote": "Bob 在回滚后消失，重新插入并提交后保留"
+          }
+        ]
+      },
+      {
+        "dimension": "独立验证与质疑",
+        "scope": "一次崩溃恢复实验包含两项预测，合为一例；预测时序为用户自述，最终表状态有独立文件佐证。",
+        "references": [
+          {
+            "pointer": "/follow_up/student_quotes/uncommitted_prediction",
+            "quote": "bob不应该存在。因为虽然执行了insert，但是没有commit说明没有保存。"
+          },
+          {
+            "pointer": "/follow_up/student_quotes/committed_prediction",
+            "quote": "charlie还应该存在，因为一旦commit执行了，说明保存了"
+          },
+          {
+            "pointer": "/follow_up/reported_observations/crash_sequence",
+            "quote": "sudo docker kill --signal=KILL minivectordb-crash-test"
+          },
+          {
+            "pointer": "/follow_up/reported_observations/crash_query",
+            "quote": "rows=[[3,\"Charlie\"]]"
+          },
+          {
+            "pointer": "/follow_up/local_checks/1/observation",
+            "quote": "现存表仅有一行，id=3，name=Charlie，未发现 Bob。"
           }
         ]
       }
