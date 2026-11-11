@@ -1,0 +1,66 @@
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_complete_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_embed_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('ollama_complete');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('ollama_embed');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL(
+'ollama_complete', '{"type":"completion","model_name":"qwen2.5"}');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT(
+'ollama_complete_ep', '{"ai_model_name":"ollama_complete","scope":"all","url":"http://127.0.0.1:19130/api/generate","access_key":"","provider":"ollama"}');
+select provider from oceanbase.DBA_OB_AI_MODEL_ENDPOINTS
+where endpoint_name = 'ollama_complete_ep';
+provider
+ollama
+select ai_complete('ollama_complete', 'hello') as complete_result;
+complete_result
+mock:hello
+mock_generate=ok
+mock_stream_disabled=ok
+mock_no_authorization=ok
+mock_content_type_json=ok
+select ai_complete('ollama_complete', 'hello', '{"temperature":0.2}') as config_result;
+config_result
+mock:hello
+mock_options_merged=ok
+call DBMS_AI_SERVICE.ALTER_AI_MODEL_ENDPOINT(
+'ollama_complete_ep', '{"provider":"Ollama"}');
+select provider from oceanbase.DBA_OB_AI_MODEL_ENDPOINTS
+where endpoint_name = 'ollama_complete_ep';
+provider
+Ollama
+select ai_complete('ollama_complete', 'after-alter') as alter_result;
+alter_result
+mock:after-alter
+call DBMS_AI_SERVICE.CREATE_AI_MODEL(
+'ollama_embed', '{"type":"dense_embedding","model_name":"nomic-embed-text"}');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT(
+'ollama_embed_ep', '{"ai_model_name":"ollama_embed","scope":"all","url":"http://127.0.0.1:19130/api/embed","access_key":"","provider":"OLLAMA"}');
+select provider from oceanbase.DBA_OB_AI_MODEL_ENDPOINTS
+where endpoint_name = 'ollama_embed_ep';
+provider
+OLLAMA
+select ai_embed('ollama_embed', 'hello') as embed_result;
+embed_result
+[1.0, 0.25, 0.5, 0.75]
+select json_valid(ai_embed('ollama_embed', 'hello')) as embed_valid;
+embed_valid
+1
+mock_embed=ok
+drop table if exists ai_ollama_batch;
+create table ai_ollama_batch(id int primary key, content text);
+insert into ai_ollama_batch values(1,'vec-zero'),(2,'vec-ten'),(3,'vec-twenty');
+select id, ai_embed('ollama_embed', content) as embedding
+from ai_ollama_batch order by id;
+id	embedding
+1	[0.0, 0.0, 0.0, 0.0]
+2	[10.0, 0.0, 0.0, 0.0]
+3	[20.0, 0.0, 0.0, 0.0]
+mock_embed_inputs=ok
+drop table ai_ollama_batch;
+select ai_complete('ollama_complete', 'not-done') as not_done_result;
+ERROR HY000: unexpected http message: {"done": false, "model": "qwen2.5", "response": "partial"}
+select ai_complete('ollama_complete', 'no-response') as no_response_result;
+ERROR HY000: unexpected http message: {"done": true, "model": "qwen2.5"}
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_complete_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_embed_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('ollama_complete');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('ollama_embed');

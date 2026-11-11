@@ -269,11 +269,96 @@ int ObOpenAIUtils::ObOpenAIEmbed::parse_output(common::ObIAllocator &allocator,
   return ret;
 }
 
+namespace
+{
+// The members of an Ollama request body which are managed by the provider
+// itself, the user defined config must never overwrite them.
+const char *OLLAMA_RESERVED_BODY_KEYS[] = {
+  "model", "prompt", "system", "stream", "input", "options", "embeddings", "embedding"
+};
+
+bool is_ollama_reserved_body_key(const ObString &key)
+{
+  bool is_reserved = false;
+  for (int i = 0; i < ARRAYSIZEOF(OLLAMA_RESERVED_BODY_KEYS); i++) {
+    if (key.case_compare(OLLAMA_RESERVED_BODY_KEYS[i]) == 0) {
+      is_reserved = true;
+      break;
+    }
+  }
+  return is_reserved;
+}
+
+// The dimension of an embedding is a provider level hint, the Ollama embed
+// interface accepts it at the top level of the request body, but it is not a
+// generation option and must not be placed into the "options" member.
+bool is_ollama_embed_reserved_body_key(const ObString &key)
+{
+  return key.case_compare("dimensions") == 0;
+}
+
+// The generation parameters of an Ollama request are carried by the "options"
+// member, but they are also accepted at the top level of the request body.
+// Both places are filled to keep the request compatible with the different
+// Ollama compatible servers.
+int merge_ollama_config(ObIAllocator &allocator,
+                         ObJsonObject *config,
+                         ObJsonObject *body_obj,
+                         bool is_embed)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(body_obj)) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (OB_NOT_NULL(config) && config->element_count() > 0) {
+    ObJsonObject *options_obj = nullptr;
+    if (OB_FAIL(ObAIFuncJsonUtils::get_json_object(allocator, options_obj))) {
+    } else {
+      ObString key;
+      int64_t count = config->element_count();
+      for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+        ObJsonNode *value_node = config->get_value(i);
+        if (OB_ISNULL(value_node)) {
+          ret = OB_ERR_UNEXPECTED;
+        } else if (OB_FAIL(config->get_key(i, key))) {
+        } else if (is_ollama_reserved_body_key(key)) {
+          // the provider owns these members
+        } else if (is_embed && is_ollama_embed_reserved_body_key(key)) {
+          // The dimension is only meaningful at the top level of the body.
+          if (OB_FAIL(body_obj->add(key, value_node))) {
+          }
+        } else {
+          ObJsonNode *options_node = value_node->clone(&allocator, true);
+          if (OB_ISNULL(options_node)) {
+            ret = OB_ALLOCATE_MEMORY_FAILED;
+          } else if (OB_FAIL(options_obj->add(key, options_node))) {
+          } else if (OB_FAIL(body_obj->add(key, value_node))) {
+          }
+        }
+      }
+      if (OB_SUCC(ret) && options_obj->element_count() > 0) {
+        if (OB_FAIL(body_obj->add("options", options_obj))) {
+        }
+      }
+    }
+  }
+  return ret;
+}
+
+} // namespace
+
 int ObOllamaUtils::get_header(common::ObIAllocator &allocator,
                               common::ObArray<ObString> &headers) 
 {
   int ret = OB_SUCCESS;
-  // ollama header is empty, do nothing
+  // Ollama does not use any credential, so no authorization header is added.
+  // The content type header is still required by the model server.
+  ObString content_type_str("Content-Type: application/json");
+  ObString content_type_c_str;
+  if (OB_FAIL(ob_write_string(allocator, content_type_str, content_type_c_str, true))) {
+    LOG_WARN("failed to write content type string", K(ret));
+  } else if (OB_FAIL(headers.push_back(content_type_c_str))) {
+    LOG_WARN("failed to push back content type header", K(ret));
+  }
   return ret;
 }
 
@@ -295,16 +380,19 @@ int ObOllamaUtils::ObOllamaComplete::get_body(common::ObIAllocator &allocator,
   if (model.empty() || content.empty()) { 
     ret = OB_INVALID_ARGUMENT;
   } else {
-    // {"model": "llama3.1", "prompt": "What is the capital of France?"}
+    // {"model": "llama3.1", "prompt": "What is the capital of France?", "stream": false}
     ObJsonObject *body_obj = nullptr;
     ObJsonString *model_str = nullptr;
     ObJsonString *content_str = nullptr;
+    ObJsonBoolean *stream_false = nullptr;
     if (OB_FAIL(ObAIFuncJsonUtils::get_json_object(allocator, body_obj))) {
     } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_string(allocator, model, model_str))) {
     } else if (OB_FAIL(body_obj->add("model", model_str))) {
     } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_string(allocator, content, content_str))) {
     } else if (OB_FAIL(body_obj->add("prompt", content_str))) {
-    } else if (OB_FAIL(ObAIFuncJsonUtils::compact_json_object(allocator, config, body_obj))) {
+    } else if (OB_FAIL(ObAIFuncJsonUtils::get_json_boolean(allocator, false, stream_false))) {
+    } else if (OB_FAIL(body_obj->add("stream", stream_false))) {
+    } else if (OB_FAIL(merge_ollama_config(allocator, config, body_obj, false))) {
     } else {
       body = body_obj;
     }
@@ -336,18 +424,45 @@ int ObOllamaUtils::ObOllamaComplete::parse_output(common::ObIAllocator &allocato
   if (OB_ISNULL(http_response)) {
     ret = OB_INVALID_ARGUMENT;
   } else {
-    ObIJsonBase *j_tree = http_response;
-    common::ObString path_text("$.response");
-    ObJsonPath j_path(path_text, &allocator);
-    ObJsonSeekResult hit;
-    if (OB_FAIL(j_path.parse_path())) {
-    } else if (OB_FAIL(j_tree->seek(j_path, j_path.path_node_cnt(), false, false, hit))) {
-    } else if (hit.size() == 0) {
-      ret = OB_ERR_UNEXPECTED;
-    } else if (OB_ISNULL(hit[0]) || hit[0]->json_type() != ObJsonNodeType::J_STRING) {
+    // The Ollama generate interface returns the generated text in the
+    // "response" member, the chat interface returns it in "message.content".
+    static const char *RESPONSE_PATHS[] = {"$.response", "$.message.content"};
+    ObIJsonBase *response_node = nullptr;
+    ObJsonNode *error_node = http_response->get_value("error");
+    ObJsonNode *done_node = http_response->get_value("done");
+    if (OB_NOT_NULL(error_node) && error_node->json_type() == ObJsonNodeType::J_STRING) {
+      // The model server reports its failures in the "error" member.
       ret = OB_INVALID_DATA;
+      LOG_WARN("ollama response contains an error", K(ret));
+    } else if (OB_NOT_NULL(done_node) && done_node->json_type() == ObJsonNodeType::J_BOOLEAN
+               && !static_cast<ObJsonBoolean *>(done_node)->value()) {
+      // The generation was not finished, the answer would be incomplete.
+      ret = OB_INVALID_DATA;
+      LOG_WARN("ollama response is not done", K(ret));
     } else {
-      result = hit[0];
+      for (int i = 0; OB_SUCC(ret) && i < ARRAYSIZEOF(RESPONSE_PATHS); i++) {
+        common::ObString path_text(RESPONSE_PATHS[i]);
+        ObJsonPath j_path(path_text, &allocator);
+        ObJsonSeekResult hit;
+        if (OB_FAIL(j_path.parse_path())) {
+        } else if (OB_FAIL(http_response->seek(j_path, j_path.path_node_cnt(), false, false, hit))) {
+        } else if (hit.size() == 0) {
+          // try the next path
+        } else if (OB_ISNULL(hit[0]) || hit[0]->json_type() != ObJsonNodeType::J_STRING) {
+          ret = OB_INVALID_DATA;
+        } else {
+          response_node = hit[0];
+          break;
+        }
+      }
+      if (OB_SUCC(ret)) {
+        if (OB_ISNULL(response_node)) {
+          ret = OB_INVALID_DATA;
+          LOG_WARN("ollama response does not contain the generated text", K(ret));
+        } else {
+          result = response_node;
+        }
+      }
     }
   }
   return ret;
@@ -370,6 +485,9 @@ int ObOllamaUtils::ObOllamaEmbed::get_body(common::ObIAllocator &allocator,
   if (model.empty() || contents.empty()) {
     ret = OB_INVALID_ARGUMENT;
   } else {
+    // {"model": "nomic-embed-text", "input": ["hello", "world"]}
+    // The Ollama embed interface accepts a single input as well as a batch
+    // of inputs, the batch form is used for both cases.
     ObJsonObject *body_obj = nullptr;
     ObJsonString *model_str = nullptr;
     ObJsonArray *input_array = nullptr;
@@ -378,12 +496,9 @@ int ObOllamaUtils::ObOllamaEmbed::get_body(common::ObIAllocator &allocator,
     } else if (OB_FAIL(body_obj->add("model", model_str))) {
     } else if (OB_FAIL(ObAIFuncJsonUtils::transform_array_to_json_array(allocator, contents, input_array))) {
     } else if (OB_FAIL(body_obj->add("input", input_array))) {
+    } else if (OB_FAIL(merge_ollama_config(allocator, config, body_obj, true))) {
     } else {
       body = body_obj;
-    }
-    if (OB_SUCC(ret)) {
-      if (OB_FAIL(ObAIFuncJsonUtils::compact_json_object(allocator, config, body))) {
-      }
     }
   }
   return ret;
@@ -397,16 +512,54 @@ int ObOllamaUtils::ObOllamaEmbed::parse_output(common::ObIAllocator &allocator,
   if (OB_ISNULL(http_response)) {
     ret = OB_INVALID_ARGUMENT;
   } else {
-    ObIJsonBase *j_tree = http_response;
-    common::ObString path_text("$.embeddings");
-    ObJsonPath j_path(path_text, &allocator);
-    ObJsonSeekResult hit;
-    if (OB_FAIL(j_path.parse_path())) {
-    } else if (OB_FAIL(j_tree->seek(j_path, j_path.path_node_cnt(), false, false, hit))) {
-    } else if (hit.size() == 0) {
-      ret = OB_ERR_UNEXPECTED;
+    // The Ollama embed interface returns one embedding per input in the
+    // "embeddings" member, the legacy interface returns a single embedding
+    // in the "embedding" member.
+    ObJsonArray *result_array = nullptr;
+    ObJsonNode *embeddings_node = http_response->get_value("embeddings");
+    ObJsonNode *embedding_node = OB_ISNULL(embeddings_node)
+                                 ? http_response->get_value("embedding")
+                                 : nullptr;
+    if (OB_FAIL(ObAIFuncJsonUtils::get_json_array(allocator, result_array))) {
+    } else if (OB_NOT_NULL(embeddings_node)) {
+      if (embeddings_node->json_type() != ObJsonNodeType::J_ARRAY) {
+        ret = OB_INVALID_DATA;
+        LOG_WARN("ollama embeddings is not an array", K(ret));
+      } else {
+        // Every input must be answered by exactly one embedding.
+        ObJsonArray *embeddings_array = static_cast<ObJsonArray *>(embeddings_node);
+        int64_t count = embeddings_array->element_count();
+        for (int64_t i = 0; OB_SUCC(ret) && i < count; i++) {
+          ObJsonNode *embedding = embeddings_array->get_value(i);
+          if (OB_ISNULL(embedding) || embedding->json_type() != ObJsonNodeType::J_ARRAY) {
+            ret = OB_INVALID_DATA;
+            LOG_WARN("ollama embedding is not an array", K(ret), K(i));
+          } else if (OB_FAIL(ObAIFuncJsonUtils::check_embed_elements_are_numbers(embedding))) {
+            ret = OB_INVALID_DATA;
+            LOG_WARN("ollama embedding contains a non numeric element", K(ret), K(i));
+          } else if (OB_FAIL(result_array->append(embedding))) {
+          }
+        }
+        if (OB_SUCC(ret)) {
+          result = result_array;
+        }
+      }
+    } else if (OB_NOT_NULL(embedding_node)) {
+      // The legacy interface answers a single embedding, it is wrapped into
+      // an array to keep the same result shape as the batch interface.
+      if (embedding_node->json_type() != ObJsonNodeType::J_ARRAY) {
+        ret = OB_INVALID_DATA;
+        LOG_WARN("ollama embedding is not an array", K(ret));
+      } else if (OB_FAIL(ObAIFuncJsonUtils::check_embed_elements_are_numbers(embedding_node))) {
+        ret = OB_INVALID_DATA;
+        LOG_WARN("ollama embedding contains a non numeric element", K(ret));
+      } else if (OB_FAIL(result_array->append(embedding_node))) {
+      } else {
+        result = result_array;
+      }
     } else {
-      result = hit[0];
+      ret = OB_INVALID_DATA;
+      LOG_WARN("ollama response does not contain the embeddings", K(ret));
     }
   }
   return ret;
@@ -1080,6 +1233,10 @@ int ObAIFuncUtils::get_complete_provider(ObIAllocator &allocator, const ObString
     complete_provider = OB_NEWx(ObOpenAIUtils::ObOpenAIComplete, &allocator);
   } else if (ob_provider_check(provider, ObAIFuncProviderUtils::DASHSCOPE)) {
     complete_provider = OB_NEWx(ObDashscopeUtils::ObDashscopeComplete, &allocator);
+  } else if (ob_provider_check(provider, ObAIFuncProviderUtils::OLLAMA)) {
+    // The Ollama provider serves a local model server and uses its own
+    // native protocol instead of the OpenAI compatible one.
+    complete_provider = OB_NEWx(ObOllamaUtils::ObOllamaComplete, &allocator);
   } else {
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "this provider current is");
@@ -1103,6 +1260,10 @@ int ObAIFuncUtils::get_embed_provider(ObIAllocator &allocator, const ObString &p
     embed_provider = OB_NEWx(ObOpenAIUtils::ObOpenAIEmbed, &allocator);
   } else if (ob_provider_check(provider, ObAIFuncProviderUtils::DASHSCOPE)) {
     embed_provider = OB_NEWx(ObDashscopeUtils::ObDashscopeEmbed, &allocator);
+  } else if (ob_provider_check(provider, ObAIFuncProviderUtils::OLLAMA)) {
+    // The Ollama provider serves a local model server and uses its own
+    // native protocol instead of the OpenAI compatible one.
+    embed_provider = OB_NEWx(ObOllamaUtils::ObOllamaEmbed, &allocator);
   } else {
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "this provider current is");
