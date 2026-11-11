@@ -131,18 +131,43 @@ def serve(port):
                     return [float(index + 1), 0.25, 0.5, 0.75]
 
                 status = 200
-                response = {
-                    "model": body.get("model", ""),
-                    "embeddings": [
-                        vector(value, index) for index, value in enumerate(values)
-                    ],
-                }
+                joined = " ".join(str(value) for value in values)
+                if "embed-not-array" in joined:
+                    # The embeddings member is not an array at all.
+                    response = {"model": body.get("model", ""), "embeddings": "oops"}
+                elif "embed-element-not-array" in joined:
+                    # An embedding is not an array of numbers.
+                    response = {"model": body.get("model", ""), "embeddings": [1, 2]}
+                elif "embed-non-numeric" in joined:
+                    # An embedding holds a value which is not a number.
+                    response = {
+                        "model": body.get("model", ""),
+                        "embeddings": [[1.0, "x", 0.5, 0.75]],
+                    }
+                elif "embed-count-mismatch" in joined:
+                    # More embeddings than inputs are answered.
+                    response = {
+                        "model": body.get("model", ""),
+                        "embeddings": [[1.0, 0.0, 0.0, 0.0], [2.0, 0.0, 0.0, 0.0]],
+                    }
+                elif "embed-missing" in joined:
+                    # The embeddings member is missing at all.
+                    response = {"model": body.get("model", "")}
+                else:
+                    response = {
+                        "model": body.get("model", ""),
+                        "embeddings": [
+                            vector(value, index) for index, value in enumerate(values)
+                        ],
+                    }
                 event = {
                     "path": parsed.path,
                     "status": status,
                     "model": body.get("model", ""),
                     "input": values,
                     "options": body.get("options", {}),
+                    "dimensions": body.get("dimensions", None),
+                    "body_keys": sorted(body.keys()),
                     "authorization": self.headers.get("Authorization", ""),
                     "content_type": self.headers.get("Content-Type", ""),
                 }
@@ -166,6 +191,22 @@ def serve(port):
                 elif "no-response" in prompt:
                     status = 200
                     response = {"model": body.get("model", ""), "done": True}
+                elif "response-not-string" in prompt:
+                    # The generated text is not a string.
+                    status = 200
+                    response = {
+                        "model": body.get("model", ""),
+                        "response": 123,
+                        "done": True,
+                    }
+                elif "server-error" in prompt:
+                    # The model server reports a failure in the error member.
+                    status = 200
+                    response = {
+                        "model": body.get("model", ""),
+                        "error": "model not found",
+                        "done": True,
+                    }
                 else:
                     status = 200
                     response = {
@@ -233,6 +274,35 @@ def assert_events(port, assertion):
                 for value in event["input"]:
                     seen.add(str(value))
         ok = seen.issuperset({"vec-zero", "vec-ten", "vec-twenty"})
+    elif assertion == "embed-dimensions":
+        # The dimension is a member of the request body itself, it is not a
+        # generation option.
+        ok = any(
+            event["path"].endswith("/api/embed")
+            and event.get("dimensions") == 4
+            and event.get("options") == {}
+            and event.get("body_keys") == ["dimensions", "input", "model"]
+            for event in events
+        )
+    elif assertion == "embed-reserved-keys":
+        # The input member belongs to the provider, the user config must not
+        # overwrite it.
+        ok = any(
+            event["path"].endswith("/api/embed")
+            and event["input"] == ["reserved"]
+            and event.get("body_keys") == ["input", "model"]
+            for event in events
+        )
+    elif assertion == "complete-reserved-keys":
+        # The model, the prompt and the stream members belong to the provider,
+        # the user config must not overwrite them.
+        ok = any(
+            event["path"].endswith("/api/generate")
+            and event["model"] == "qwen2.5"
+            and event["prompt"] == "reserved"
+            and event["stream"] is False
+            for event in events
+        )
     else:
         raise ValueError("unknown assertion: " + assertion)
     if not ok:

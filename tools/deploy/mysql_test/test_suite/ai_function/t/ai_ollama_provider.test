@@ -36,6 +36,11 @@ select ai_complete('ollama_complete', 'hello') as complete_result;
 select ai_complete('ollama_complete', 'hello', '{"temperature":0.2}') as config_result;
 --exec python3 mysql_test/test_suite/ai_function/include/ai_ollama_mock.py assert 19130 options-merged
 
+# The members which belong to the provider are never overwritten by the
+# user defined config.
+select ai_complete('ollama_complete', 'reserved', '{"model":"evil-model","prompt":"evil-prompt","stream":true}') as reserved_result;
+--exec python3 mysql_test/test_suite/ai_function/include/ai_ollama_mock.py assert 19130 complete-reserved-keys
+
 # An endpoint without a credential can be altered, the provider name is
 # case insensitive.
 call DBMS_AI_SERVICE.ALTER_AI_MODEL_ENDPOINT(
@@ -55,6 +60,14 @@ select ai_embed('ollama_embed', 'hello') as embed_result;
 select json_valid(ai_embed('ollama_embed', 'hello')) as embed_valid;
 --exec python3 mysql_test/test_suite/ai_function/include/ai_ollama_mock.py assert 19130 embed
 
+# The input member belongs to the provider, it is never overwritten.
+select ai_embed('ollama_embed', 'reserved') as embed_reserved_result;
+--exec python3 mysql_test/test_suite/ai_function/include/ai_ollama_mock.py assert 19130 embed-reserved-keys
+
+# The dimension is a member of the request body, it is not an option.
+select ai_embed('ollama_embed', 'hello', 4) as embed_dim_result;
+--exec python3 mysql_test/test_suite/ai_function/include/ai_ollama_mock.py assert 19130 embed-dimensions
+
 # Every input of a batch is answered by its own embedding.
 --disable_warnings
 drop table if exists ai_ollama_batch;
@@ -72,6 +85,43 @@ select ai_complete('ollama_complete', 'not-done') as not_done_result;
 # An answer without any text is rejected.
 --error 4070
 select ai_complete('ollama_complete', 'no-response') as no_response_result;
+# An answer whose text is not a string is rejected.
+--error 4070
+select ai_complete('ollama_complete', 'response-not-string') as not_string_result;
+# A failure reported by the model server is rejected.
+--error 4070
+select ai_complete('ollama_complete', 'server-error') as server_error_result;
+
+# A malformed embedding answer is rejected.
+--error 4070
+select ai_embed('ollama_embed', 'embed-not-array') as embed_not_array_result;
+--error 4070
+select ai_embed('ollama_embed', 'embed-element-not-array') as embed_element_result;
+--error 4070
+select ai_embed('ollama_embed', 'embed-non-numeric') as embed_non_numeric_result;
+--error 4070
+select ai_embed('ollama_embed', 'embed-missing') as embed_missing_result;
+# Every input must be answered by exactly one embedding.
+--error 1210
+select ai_embed('ollama_embed', 'embed-count-mismatch') as embed_count_result;
+# The dimension of the answer must match the requested one.
+--error 1210
+select ai_embed('ollama_embed', 'hello', 8) as embed_dim_mismatch_result;
+
+# The Ollama provider does not need any credential, the other providers still
+# do.
+call DBMS_AI_SERVICE.CREATE_AI_MODEL('ollama_nokey', '{"type":"completion","model_name":"qwen2.5"}');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT('ollama_nokey_ep', '{"ai_model_name":"ollama_nokey","scope":"all","url":"http://127.0.0.1:19130/api/generate","provider":"ollama"}');
+select endpoint_name, provider, access_key from oceanbase.DBA_OB_AI_MODEL_ENDPOINTS
+where endpoint_name = 'ollama_nokey_ep';
+select ai_complete('ollama_nokey', 'no-key') as nokey_result;
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_nokey_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('ollama_nokey');
+
+call DBMS_AI_SERVICE.CREATE_AI_MODEL('openai_nokey', '{"type":"completion","model_name":"gpt-4o"}');
+--error 11114
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT('openai_nokey_ep', '{"ai_model_name":"openai_nokey","scope":"all","url":"http://127.0.0.1:19130/api/generate","provider":"openai"}');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('openai_nokey');
 
 # The endpoints are dropped again.
 call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_complete_ep');

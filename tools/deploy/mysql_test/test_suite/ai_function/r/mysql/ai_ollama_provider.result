@@ -21,6 +21,10 @@ select ai_complete('ollama_complete', 'hello', '{"temperature":0.2}') as config_
 config_result
 mock:hello
 mock_options_merged=ok
+select ai_complete('ollama_complete', 'reserved', '{"model":"evil-model","prompt":"evil-prompt","stream":true}') as reserved_result;
+reserved_result
+mock:reserved
+mock_complete_reserved_keys=ok
 call DBMS_AI_SERVICE.ALTER_AI_MODEL_ENDPOINT(
 'ollama_complete_ep', '{"provider":"Ollama"}');
 select provider from oceanbase.DBA_OB_AI_MODEL_ENDPOINTS
@@ -45,6 +49,14 @@ select json_valid(ai_embed('ollama_embed', 'hello')) as embed_valid;
 embed_valid
 1
 mock_embed=ok
+select ai_embed('ollama_embed', 'reserved') as embed_reserved_result;
+embed_reserved_result
+[1.0, 0.25, 0.5, 0.75]
+mock_embed_reserved_keys=ok
+select ai_embed('ollama_embed', 'hello', 4) as embed_dim_result;
+embed_dim_result
+[1.0, 0.25, 0.5, 0.75]
+mock_embed_dimensions=ok
 drop table if exists ai_ollama_batch;
 create table ai_ollama_batch(id int primary key, content text);
 insert into ai_ollama_batch values(1,'vec-zero'),(2,'vec-ten'),(3,'vec-twenty');
@@ -60,6 +72,37 @@ select ai_complete('ollama_complete', 'not-done') as not_done_result;
 ERROR HY000: unexpected http message: {"done": false, "model": "qwen2.5", "response": "partial"}
 select ai_complete('ollama_complete', 'no-response') as no_response_result;
 ERROR HY000: unexpected http message: {"done": true, "model": "qwen2.5"}
+select ai_complete('ollama_complete', 'response-not-string') as not_string_result;
+ERROR HY000: unexpected http message: {"done": true, "model": "qwen2.5", "response": 123}
+select ai_complete('ollama_complete', 'server-error') as server_error_result;
+ERROR HY000: unexpected http message: {"done": true, "error": "model not found", "model": "qwen2.5"}
+select ai_embed('ollama_embed', 'embed-not-array') as embed_not_array_result;
+ERROR HY000: unexpected http message: {"model": "nomic-embed-text", "embeddings": "oops"}
+select ai_embed('ollama_embed', 'embed-element-not-array') as embed_element_result;
+ERROR HY000: unexpected http message: {"model": "nomic-embed-text", "embeddings": [1, 2]}
+select ai_embed('ollama_embed', 'embed-non-numeric') as embed_non_numeric_result;
+ERROR HY000: unexpected http message: {"model": "nomic-embed-text", "embeddings": [[1.0, "x", 0.5, 0.75]]}
+select ai_embed('ollama_embed', 'embed-missing') as embed_missing_result;
+ERROR HY000: unexpected http message: {"model": "nomic-embed-text"}
+select ai_embed('ollama_embed', 'embed-count-mismatch') as embed_count_result;
+ERROR HY000: Incorrect arguments to ai_embed, result count does not match the request count
+select ai_embed('ollama_embed', 'hello', 8) as embed_dim_mismatch_result;
+ERROR HY000: Incorrect arguments to ai_embed, result dimension is not equal to dimension
+call DBMS_AI_SERVICE.CREATE_AI_MODEL('ollama_nokey', '{"type":"completion","model_name":"qwen2.5"}');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT('ollama_nokey_ep', '{"ai_model_name":"ollama_nokey","scope":"all","url":"http://127.0.0.1:19130/api/generate","provider":"ollama"}');
+select endpoint_name, provider, access_key from oceanbase.DBA_OB_AI_MODEL_ENDPOINTS
+where endpoint_name = 'ollama_nokey_ep';
+endpoint_name	provider	access_key
+ollama_nokey_ep	ollama	
+select ai_complete('ollama_nokey', 'no-key') as nokey_result;
+nokey_result
+mock:no-key
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_nokey_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('ollama_nokey');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL('openai_nokey', '{"type":"completion","model_name":"gpt-4o"}');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT('openai_nokey_ep', '{"ai_model_name":"openai_nokey","scope":"all","url":"http://127.0.0.1:19130/api/generate","provider":"openai"}');
+ERROR HY000: The param 'access_key' is empty or null
+call DBMS_AI_SERVICE.DROP_AI_MODEL('openai_nokey');
 call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_complete_ep');
 call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('ollama_embed_ep');
 call DBMS_AI_SERVICE.DROP_AI_MODEL('ollama_complete');
