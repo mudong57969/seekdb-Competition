@@ -247,6 +247,23 @@ public:
   // inside the response array. The provider may return the items in any
   // order, the optional "index" field of an item defines its position.
   static int build_embed_index_map(ObJsonArray *data_array, ObArray<int64_t> &index_map);
+  // Extract the "index" field of a rerank result item and check it is an
+  // integer within [0, expect_count). Returns OB_ENTRY_NOT_EXIST when the
+  // item does not carry an index at all, and OB_INVALID_DATA when the index
+  // is present but is not an integer or is out of range.
+  static int get_rerank_item_index(ObIJsonBase *item, int64_t expect_count, int64_t &index);
+  // Extract the relevance score of a rerank result item. The score may be
+  // encoded as an integer or as a double. Returns OB_ENTRY_NOT_EXIST when the
+  // item does not carry a score at all, and OB_INVALID_DATA when the score is
+  // present but is not a number.
+  static int get_rerank_item_score(ObIJsonBase *item, ObJsonNode *&score_node, double &score);
+  // Rewrite the "index" field of a rerank result item. Returns
+  // OB_ENTRY_NOT_EXIST when the item does not carry an index at all and
+  // OB_INVALID_DATA when the index is not an integer.
+  static int set_rerank_item_index(ObIJsonBase *item, int64_t index);
+  // Read a json node which must hold a number. Returns OB_ENTRY_NOT_EXIST
+  // when the node is absent and OB_INVALID_DATA when it does not hold a number.
+  static int get_json_number_value(ObJsonNode *node, double &value);
   static int transform_array_to_json_array(ObIAllocator &allocator, ObArray<ObString> &contents, ObJsonArray *&array);
   static int get_json_object(ObIAllocator &allocator, ObJsonObject *&obj_node);
   static int get_json_array(ObIAllocator &allocator, ObJsonArray *&array_node);

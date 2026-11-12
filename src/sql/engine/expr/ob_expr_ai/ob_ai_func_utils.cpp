@@ -853,11 +853,21 @@ int ObDashscopeUtils::ObDashscopeRerank::parse_output(common::ObIAllocator &allo
   int ret = OB_SUCCESS;
   ObJsonObject *output_obj = nullptr;
   ObJsonArray *results_array = nullptr;
+  ObJsonNode *output_node = nullptr;
+  ObJsonNode *results_node = nullptr;
   if (OB_ISNULL(http_response)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_ISNULL(output_obj = static_cast<ObJsonObject *>(http_response->get_value("output")))) {
+  } else if (OB_ISNULL(output_node = http_response->get_value("output"))) {
     ret = OB_INVALID_DATA;
-  } else if (OB_ISNULL(results_array = static_cast<ObJsonArray *>(output_obj->get_value("results")))) {
+  } else if (output_node->json_type() != ObJsonNodeType::J_OBJECT) {
+    ret = OB_INVALID_DATA;
+  } else if (OB_ISNULL(output_obj = static_cast<ObJsonObject *>(output_node))) {
+    ret = OB_INVALID_DATA;
+  } else if (OB_ISNULL(results_node = output_obj->get_value("results"))) {
+    ret = OB_INVALID_DATA;
+  } else if (results_node->json_type() != ObJsonNodeType::J_ARRAY) {
+    ret = OB_INVALID_DATA;
+  } else if (OB_ISNULL(results_array = static_cast<ObJsonArray *>(results_node))) {
     ret = OB_INVALID_DATA;
   } else {
     result = results_array;
@@ -919,9 +929,14 @@ int ObSiliconflowUtils::ObSiliconflowRerank::parse_output(common::ObIAllocator &
 {
   int ret = OB_SUCCESS;
   ObJsonArray *results_array = nullptr;
+  ObJsonNode *results_node = nullptr;
   if (OB_ISNULL(http_response)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_ISNULL(results_array = static_cast<ObJsonArray *>(http_response->get_value("results")))) {
+  } else if (OB_ISNULL(results_node = http_response->get_value("results"))) {
+    ret = OB_INVALID_DATA;
+  } else if (results_node->json_type() != ObJsonNodeType::J_ARRAY) {
+    ret = OB_INVALID_DATA;
+  } else if (OB_ISNULL(results_array = static_cast<ObJsonArray *>(results_node))) {
     ret = OB_INVALID_DATA;
   } else {
     result = results_array;
@@ -1859,6 +1874,100 @@ int ObAIFuncJsonUtils::build_embed_index_map(ObJsonArray *data_array, ObArray<in
           }
         }
       }
+    }
+  }
+  return ret;
+}
+
+int ObAIFuncJsonUtils::get_rerank_item_index(ObIJsonBase *item, int64_t expect_count, int64_t &index)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(item) || item->json_type() != ObJsonNodeType::J_OBJECT) {
+    ret = OB_INVALID_DATA;
+  } else {
+    ObJsonObject *item_obj = static_cast<ObJsonObject *>(item);
+    ObJsonNode *index_node = item_obj->get_value("index");
+    if (OB_ISNULL(index_node)) {
+      // The item does not carry an index at all.
+      ret = OB_ENTRY_NOT_EXIST;
+    } else if (index_node->json_type() != ObJsonNodeType::J_INT
+               && index_node->json_type() != ObJsonNodeType::J_UINT) {
+      // Only an integral index identifies the document it belongs to.
+      ret = OB_INVALID_DATA;
+    } else {
+      int64_t raw_index = (index_node->json_type() == ObJsonNodeType::J_INT)
+                          ? static_cast<ObJsonInt *>(index_node)->value()
+                          : static_cast<ObJsonUint *>(index_node)->value();
+      if (raw_index < 0 || raw_index >= expect_count) {
+        ret = OB_INVALID_DATA;
+      } else {
+        index = raw_index;
+      }
+    }
+  }
+  return ret;
+}
+
+int ObAIFuncJsonUtils::get_rerank_item_score(ObIJsonBase *item, ObJsonNode *&score_node, double &score)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(item) || item->json_type() != ObJsonNodeType::J_OBJECT) {
+    ret = OB_INVALID_DATA;
+  } else {
+    ObJsonObject *item_obj = static_cast<ObJsonObject *>(item);
+    ObJsonNode *node = item_obj->get_value("relevance_score");
+    if (OB_ISNULL(node)) {
+      ret = OB_ENTRY_NOT_EXIST;
+    } else if (node->json_type() == ObJsonNodeType::J_DOUBLE) {
+      score_node = node;
+      score = static_cast<ObJsonDouble *>(node)->value();
+    } else if (node->json_type() == ObJsonNodeType::J_INT) {
+      score_node = node;
+      score = static_cast<double>(static_cast<ObJsonInt *>(node)->value());
+    } else if (node->json_type() == ObJsonNodeType::J_UINT) {
+      score_node = node;
+      score = static_cast<double>(static_cast<ObJsonUint *>(node)->value());
+    } else {
+      // A score which is not a number cannot be used to rank the documents.
+      ret = OB_INVALID_DATA;
+    }
+  }
+  return ret;
+}
+
+int ObAIFuncJsonUtils::get_json_number_value(ObJsonNode *node, double &value)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(node)) {
+    ret = OB_ENTRY_NOT_EXIST;
+  } else if (node->json_type() == ObJsonNodeType::J_DOUBLE) {
+    value = static_cast<ObJsonDouble *>(node)->value();
+  } else if (node->json_type() == ObJsonNodeType::J_INT) {
+    value = static_cast<double>(static_cast<ObJsonInt *>(node)->value());
+  } else if (node->json_type() == ObJsonNodeType::J_UINT) {
+    value = static_cast<double>(static_cast<ObJsonUint *>(node)->value());
+  } else {
+    ret = OB_INVALID_DATA;
+  }
+  return ret;
+}
+
+int ObAIFuncJsonUtils::set_rerank_item_index(ObIJsonBase *item, int64_t index)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(item) || item->json_type() != ObJsonNodeType::J_OBJECT) {
+    ret = OB_INVALID_DATA;
+  } else {
+    ObJsonObject *item_obj = static_cast<ObJsonObject *>(item);
+    ObJsonNode *index_node = item_obj->get_value("index");
+    if (OB_ISNULL(index_node)) {
+      ret = OB_ENTRY_NOT_EXIST;
+    } else if (index_node->json_type() == ObJsonNodeType::J_INT) {
+      static_cast<ObJsonInt *>(index_node)->set_value(index);
+    } else if (index_node->json_type() == ObJsonNodeType::J_UINT) {
+      static_cast<ObJsonUint *>(index_node)->set_value(static_cast<uint64_t>(index));
+    } else {
+      ret = OB_INVALID_DATA;
     }
   }
   return ret;
