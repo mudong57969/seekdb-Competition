@@ -1,0 +1,42 @@
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('embed_batch_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('embed_batch');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL(
+'embed_batch', '{"type":"dense_embedding","model_name":"mock-embed"}');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT(
+'embed_batch_ep', '{"ai_model_name":"embed_batch","scope":"all","url":"http://127.0.0.1:19140/v1/embeddings","access_key":"batch-key","provider":"openai"}');
+drop table if exists ai_embed_batch_t;
+create table ai_embed_batch_t(id int primary key, content text);
+insert into ai_embed_batch_t values(1,'a'),(2,'bb'),(3,null),(4,'dddd');
+select id, ai_embed('embed_batch', content) as embedding
+from ai_embed_batch_t order by id;
+id	embedding
+1	[1.0, 0.25]
+2	[2.0, 0.25]
+3	NULL
+4	[4.0, 0.25]
+mock_single_request=ok
+mock_inputs=ok
+select id, ai_embed('embed_batch', content, 4) as embedding
+from ai_embed_batch_t order by id;
+id	embedding
+1	[1.0, 0.25, 0.5, 0.5]
+2	[2.0, 0.25, 0.5, 0.5]
+3	NULL
+4	[4.0, 0.25, 0.5, 0.5]
+mock_single_request=ok
+mock_dimensions=ok
+select id, json_length(ai_embed('embed_batch', content)) as dimension
+from ai_embed_batch_t order by id;
+id	dimension
+1	2
+2	2
+3	NULL
+4	2
+drop table if exists ai_embed_batch_mismatch;
+create table ai_embed_batch_mismatch(id int primary key, content text);
+insert into ai_embed_batch_mismatch values(1,'count-mismatch');
+select id, ai_embed('embed_batch', content) from ai_embed_batch_mismatch;
+drop table ai_embed_batch_t;
+drop table ai_embed_batch_mismatch;
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('embed_batch_ep');
+call DBMS_AI_SERVICE.DROP_AI_MODEL('embed_batch');

@@ -386,6 +386,12 @@ public:
    int call_dense_embedding(ObString &content, ObJsonObject *config, ObString &result);
    int call_dense_embedding_vector(ObArray<ObString> &contents, ObJsonObject *config, ObArray<ObString> &results);
    int call_dense_embedding_vector_v2(ObArray<ObString> &contents, ObJsonObject *config, ObArray<ObString> &results);
+   // Send every content of one batch within a single model request, the
+   // answers are returned in the order of the contents. The model service
+   // must answer every content with exactly one embedding, a different
+   // number of answers is reported as an error instead of being mapped to
+   // the rows.
+   int call_dense_embedding_batch(ObArray<ObString> &contents, ObJsonObject *config, ObArray<ObString> &results);
    // rerank
    int call_rerank(ObString &query, ObJsonArray *contents, ObJsonArray *&results);
  private:

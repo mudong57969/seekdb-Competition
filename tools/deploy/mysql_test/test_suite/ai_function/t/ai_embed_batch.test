@@ -1,0 +1,61 @@
+# AI_EMBED cross row batching: the rows of one batch are merged into a single
+# model request, the answers are mapped back to the rows they belong to and
+# the null rows neither enter the request nor shift the other answers.
+
+connection default;
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py start 19140
+
+--error 0,11112
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('embed_batch_ep');
+--error 0,11118
+call DBMS_AI_SERVICE.DROP_AI_MODEL('embed_batch');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL(
+  'embed_batch', '{"type":"dense_embedding","model_name":"mock-embed"}');
+call DBMS_AI_SERVICE.CREATE_AI_MODEL_ENDPOINT(
+  'embed_batch_ep', '{"ai_model_name":"embed_batch","scope":"all","url":"http://127.0.0.1:19140/v1/embeddings","access_key":"batch-key","provider":"openai"}');
+
+--disable_warnings
+drop table if exists ai_embed_batch_t;
+--enable_warnings
+create table ai_embed_batch_t(id int primary key, content text);
+insert into ai_embed_batch_t values(1,'a'),(2,'bb'),(3,null),(4,'dddd');
+
+# Every row is answered with the embedding of its own content, the null row
+# is answered with a null and is not sent to the model service.
+select id, ai_embed('embed_batch', content) as embedding
+  from ai_embed_batch_t order by id;
+
+# The three rows of the batch are merged into one single request.
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py assert 19140 single-request
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py assert 19140 inputs a,bb,dddd
+
+# The dimension is a member of the request body, the rows of the batch share
+# one request as well.
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py reset 19140
+select id, ai_embed('embed_batch', content, 4) as embedding
+  from ai_embed_batch_t order by id;
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py assert 19140 single-request
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py assert 19140 dimensions 4
+
+# A nested call answers every row with the embedding of its own content too.
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py reset 19140
+select id, json_length(ai_embed('embed_batch', content)) as dimension
+  from ai_embed_batch_t order by id;
+
+# A model service which answers less embeddings than it got inputs must not
+# shift the answers of the rows, the query fails instead.
+--disable_warnings
+drop table if exists ai_embed_batch_mismatch;
+--enable_warnings
+create table ai_embed_batch_mismatch(id int primary key, content text);
+insert into ai_embed_batch_mismatch values(1,'count-mismatch');
+--error 0,1210
+select id, ai_embed('embed_batch', content) from ai_embed_batch_mismatch;
+
+drop table ai_embed_batch_t;
+drop table ai_embed_batch_mismatch;
+--error 0,11112
+call DBMS_AI_SERVICE.DROP_AI_MODEL_ENDPOINT('embed_batch_ep');
+--error 0,11118
+call DBMS_AI_SERVICE.DROP_AI_MODEL('embed_batch');
+--exec python3 mysql_test/test_suite/ai_function/include/ai_embed_batch_mock.py stop 19140

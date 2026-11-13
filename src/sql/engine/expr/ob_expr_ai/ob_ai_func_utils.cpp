@@ -1701,6 +1701,24 @@ int ObAIFuncModel::call_dense_embedding_vector_v2(ObArray<ObString> &content, Ob
   return ret;
 }
 
+int ObAIFuncModel::call_dense_embedding_batch(ObArray<ObString> &contents,
+                                              ObJsonObject *config,
+                                              ObArray<ObString> &results)
+{
+  int ret = OB_SUCCESS;
+  if (contents.count() == 0) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, "ai_embed, input is empty");
+  } else if (OB_FAIL(call_dense_embedding_vector_v2(contents, config, results))) {
+  } else if (results.count() != contents.count()) {
+    // The model service must answer every input of the batch with exactly
+    // one embedding, otherwise the answers cannot be mapped back to the rows.
+    ret = OB_ERR_UNEXPECTED;
+    LOG_USER_ERROR(OB_ERR_UNEXPECTED, "ai_embed, result count does not match the request count");
+  }
+  return ret;
+}
+
 int ObAIFuncModel::call_rerank(ObString &query, ObJsonArray *contents, ObJsonArray *&results)
 {
   int ret = OB_SUCCESS;
@@ -1807,6 +1825,11 @@ int ObAIFuncJsonUtils::build_embed_index_map(ObJsonArray *data_array, ObArray<in
   if (OB_ISNULL(data_array)) {
     ret = OB_INVALID_ARGUMENT;
   } else {
+    // The map is filled by push_back(), so the count of the array must be
+    // reset here. prepare_allocate() sets the count of the array, the values
+    // of the former content would be kept and would silently map every item
+    // to the first element of the response.
+    index_map.reuse();
     int64_t count = data_array->element_count();
     // Collect the index of every item. Items carrying an explicit index
     // define their own position, the remaining ones keep their relative order.
