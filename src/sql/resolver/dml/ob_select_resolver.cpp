@@ -15,6 +15,7 @@
  */
 
 #define USING_LOG_PREFIX SQL_RESV
+#include "sql/engine/basic/file_scan/file_csv_reader.h"
 #include "sql/resolver/dml/ob_select_resolver.h"
 #include "sql/resolver/dml/ob_del_upd_resolver.h"
 #include "share/ob_time_utility2.h"
@@ -76,11 +77,14 @@ int ObSelectResolver::resolve_set_query(const ParseNode &parse_tree)
   int ret = OB_SUCCESS;
   bool recursive_union = false;
   bool resolve_happened = false;
+  const ParseNode *into = ObResolverUtils::get_select_into_node(parse_tree);
+  const bool copy = into != nullptr && into->type_ == T_INTO_OUTFILE && into->value_ == 1
+      && (into->num_child_ == 2 || into->num_child_ == 3);
   if (OB_FAIL(check_query_is_recursive_union(parse_tree, recursive_union))) {
   } else if (recursive_union) {
     if (OB_FAIL(do_resolve_set_query_in_recursive_cte(parse_tree))) {
     }
-  } else if (OB_FAIL(try_resolve_values_table_from_union(parse_tree, resolve_happened))) {
+  } else if (!copy && OB_FAIL(try_resolve_values_table_from_union(parse_tree, resolve_happened))) {
   } else if (resolve_happened) {
     OPT_TRACE("resolve values table from union", resolve_happened);
     OPT_TRACE(get_stmt());
@@ -326,10 +330,13 @@ int ObSelectResolver::do_resolve_set_query_in_normal(const ParseNode &parse_tree
   ObSelectStmt *select_stmt = get_select_stmt();
   ParseNode *select_set = parse_tree.children_[PARSE_SELECT_SET];
   bool force_serial_set_order = false;
+  const ParseNode *into = ObResolverUtils::get_select_into_node(parse_tree);
+  const bool copy = into != nullptr && into->type_ == T_INTO_OUTFILE && into->value_ == 1
+      && (into->num_child_ == 2 || into->num_child_ == 3);
   if (OB_ISNULL(select_set) || OB_ISNULL(select_stmt) || OB_ISNULL(session_info_)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(set_stmt_set_type(select_stmt, select_set))) {
-  } else if (OB_FAIL(resolve_into_clause(ObResolverUtils::get_select_into_node(parse_tree)))) {
+  } else if (!copy && OB_FAIL(resolve_into_clause(into))) {
   } else if (OB_FAIL(resolve_with_clause(parse_tree.children_[PARSE_SELECT_WITH]))) {
   } else {
     const int64_t num_child = select_set->num_child_;
@@ -382,6 +389,7 @@ int ObSelectResolver::do_resolve_set_query_in_normal(const ParseNode &parse_tree
   }
 
   if (OB_FAIL(ret)) {
+  } else if (copy && OB_FAIL(resolve_into_clause(into))) {
   } else if (OB_FAIL(resolve_order_clause(parse_tree.children_[PARSE_SELECT_ORDER], force_serial_set_order))) {
   } else if (OB_FAIL(resolve_limit_clause(parse_tree.children_[PARSE_SELECT_LIMIT]))) {
   } else if (OB_FAIL(resolve_fetch_clause(parse_tree.children_[PARSE_SELECT_FETCH]))) {
@@ -3085,6 +3093,8 @@ int ObSelectResolver::resolve_into_clause(const ParseNode *node)
 {
   int ret = OB_SUCCESS;
   if (NULL != node) {
+    const bool copy = node->type_ == T_INTO_OUTFILE && node->value_ == 1
+        && (node->num_child_ == 2 || node->num_child_ == 3);
     current_scope_ = T_INTO_SCOPE;
     ObSelectIntoItem *into_item = NULL;
     ObSelectStmt *select_stmt = get_select_stmt();
@@ -3097,7 +3107,7 @@ int ObSelectResolver::resolve_into_clause(const ParseNode *node)
       ret = OB_ERR_UNEXPECTED;
     } else if (OB_UNLIKELY(is_sub_stmt_)) { //in subquery
       ret = OB_INAPPROPRIATE_INTO;
-    } else if (OB_UNLIKELY(is_in_set_query())) {
+    } else if (OB_UNLIKELY(is_in_set_query()) && !copy) {
       ret = OB_INAPPROPRIATE_INTO;
     } else if (params_.is_from_create_view_) {
       ret = OB_ERR_VIEW_SELECT_CONTAIN_INTO;
@@ -3105,8 +3115,46 @@ int ObSelectResolver::resolve_into_clause(const ParseNode *node)
       new(into_item) ObSelectIntoItem();
       into_item->into_type_ = node->type_;
       if (T_INTO_OUTFILE == node->type_) { // into outfile
-        if (is_in_set_query()) {
+        if (is_in_set_query() && !copy) {
           ret = OB_INAPPROPRIATE_INTO;
+        } else if ((node->num_child_ == 2 || node->num_child_ == 3) && node->value_ == 1) {
+          bool enabled = false;
+          ObString allowed;
+          if (params_.is_prepare_protocol_) {
+            ret = OB_NOT_SUPPORTED;
+            LOG_USER_ERROR(OB_NOT_SUPPORTED, "prepared COPY TO");
+          } else if (OB_FAIL(session_info_->get_file_sql_access(*allocator_, enabled, allowed))) {
+          } else if (!enabled) {
+            ret = OB_NOT_SUPPORTED;
+            LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL while enable_file_sql is OFF");
+          } else if (OB_FAIL(resolve_into_const_node(node->children_[0], into_item->outfile_name_))) {
+          } else {
+            if (node->num_child_ == 3) {
+              OZ (resolve_into_const_node(node->children_[2], into_item->line_str_));
+            } else {
+              into_item->line_str_.set_varchar(ObString::make_string("NULL"));
+              into_item->line_str_.set_collation_type(CS_TYPE_UTF8MB4_BIN);
+            }
+            into_item->external_properties_ = ObString::make_string(file_scan::CSV_COPY_MODE);
+            into_item->is_single_ = true;
+            const ParseNode &header = *node->children_[1];
+            if (header.type_ == T_QUESTIONMARK) {
+              into_item->field_str_.set_unknown(header.value_);
+            } else {
+              into_item->field_str_.set_bool(header.value_ != 0);
+            }
+            for (int64_t i = 0; OB_SUCC(ret) && i < select_stmt->get_select_item_size(); ++i) {
+              const SelectItem &item = select_stmt->get_select_item(i);
+              const ObString &name = item.alias_name_.empty() ? item.expr_name_ : item.alias_name_;
+              if (name.empty()) {
+                ret = OB_INVALID_ARGUMENT;
+                LOG_USER_ERROR(OB_INVALID_ARGUMENT, "COPY CSV projection needs a nonempty column name");
+              } else {
+                OZ (into_item->user_vars_.push_back(name));
+              }
+            }
+            select_stmt->get_query_ctx()->has_file_scan_ = true;
+          }
         } else if (node->num_child_ == 3 && NULL != node->children_[1]
             && T_EXTERNAL_FILE_FORMAT == node->children_[1]->type_) { // Handle with `FORMAT`
           if (OB_FAIL(resolve_into_outfile_with_format(node, *into_item))) {

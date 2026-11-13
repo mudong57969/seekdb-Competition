@@ -16,10 +16,14 @@
 
 #define USING_LOG_PREFIX SQL_ENG
 
+#include <cerrno>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 
 #include "ob_select_into_op.h"
+#include "sql/engine/basic/file_scan/file_csv_reader.h"
+#include "config_bridge.h"
 #include "sql/engine/cmd/ob_variable_set_executor.h"
 #include "lib/charset/ob_charset_string_helper.h"
 #include "sql/engine/px/ob_px_sqc_handler.h"
@@ -52,6 +56,9 @@ int ObSelectIntoOp::inner_open()
     opened_ = true;
     if (OB_FAIL(session->get_sql_select_limit(top_limit_cnt_))) {
     }
+  }
+  if (OB_SUCC(ret) && MY_SPEC.external_properties_.str_ == file_scan::CSV_COPY_MODE) {
+    return ret;
   }
   if (OB_SUCC(ret) && !MY_SPEC.external_properties_.str_.empty()) {
     if (OB_FAIL(external_properties_.load_from_string(MY_SPEC.external_properties_.str_,
@@ -186,8 +193,166 @@ int ObSelectIntoOp::calc_outfile_path()
   }
   return ret;
 }
+namespace
+{
+int csv_copy_error(int error)
+{
+  if (error == 0) {
+    return OB_SUCCESS;
+  }
+  if (error == EACCES || error == EPERM) {
+    LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, "secure_file_priv");
+    return OB_ERR_NO_PRIVILEGE;
+  }
+  if (error == EEXIST) {
+    return OB_FILE_ALREADY_EXIST;
+  }
+  if (error == EILSEQ || error == EINVAL) {
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, "COPY CSV requires a .csv destination and UTF-8 data");
+    return OB_INVALID_ARGUMENT;
+  }
+  const int ret = OB_IO_ERROR;
+  LOG_WARN("COPY CSV I/O failed", K(error));
+  return ret;
+}
+} // namespace
+
+int ObSelectIntoOp::copy_csv_rows()
+{
+  int ret = OB_SUCCESS;
+  auto *session = ctx_.get_my_session();
+  auto *plan_ctx = ctx_.get_physical_plan_ctx();
+  ObArenaAllocator policy_allocator(ObModIds::OB_SQL_SESSION);
+  ObString allowed;
+  bool enabled = false;
+  file_scan::CsvExport writer;
+  ObObj header = MY_SPEC.field_str_;
+  ObObj null_marker = MY_SPEC.line_str_;
+  int64_t row_count = 0;
+  if (OB_ISNULL(session) || OB_ISNULL(plan_ctx) || OB_ISNULL(child_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(ctx_.check_status())) {
+  } else if (OB_FAIL(session->get_file_sql_access(policy_allocator, enabled, allowed))) {
+  } else if (!enabled) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL while enable_file_sql is OFF");
+  } else {
+    std::vector<std::string> protected_directories;
+    auto data = config::data_dir();
+    auto redo = config::redo_dir();
+    for (const char *path : {data.c_str(), redo.c_str()}) {
+      if (*path != '\0') {
+        std::error_code error;
+        auto canonical = std::filesystem::canonical(path, error);
+        if (error) {
+          ret = OB_IO_ERROR;
+          break;
+        }
+        protected_directories.push_back(canonical.string());
+      }
+    }
+    ObObj file_name = MY_SPEC.outfile_name_;
+    bool need_check = false;
+    OZ (ObSQLUtils::get_param_value(MY_SPEC.outfile_name_, plan_ctx->get_param_store(), file_name, need_check));
+    OZ (ObSQLUtils::get_param_value(MY_SPEC.line_str_, plan_ctx->get_param_store(), null_marker, need_check));
+    OZ (ObSQLUtils::get_param_value(MY_SPEC.field_str_, plan_ctx->get_param_store(), header, need_check));
+    if (OB_SUCC(ret) && !header.is_true() && !header.is_false()) {
+      ret = OB_INVALID_ARGUMENT;
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, "COPY CSV HEADER requires a boolean");
+    }
+    if (OB_SUCC(ret) && (!null_marker.is_string_type()
+        || std::string_view(null_marker.get_string().ptr(), null_marker.get_string().length())
+               .find_first_of(",\"\r\n") != std::string_view::npos)) {
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "COPY NULL marker requiring CSV quoting");
+    }
+    if (OB_SUCC(ret)) {
+      const ObString path = file_name.get_string();
+      ret = csv_copy_error(writer.open(std::string(allowed.ptr(), allowed.length()),
+                                      std::string(path.ptr(), path.length()), protected_directories));
+    }
+  }
+  if (OB_SUCC(ret) && header.is_true()) {
+    for (int64_t i = 0; OB_SUCC(ret) && i < MY_SPEC.user_vars_.count(); ++i) {
+      const ObString &name = MY_SPEC.user_vars_.at(i);
+      if (i > 0) {
+        OZ (csv_copy_error(writer.write_separator(',')));
+      }
+      OZ (csv_copy_error(writer.write_field(std::string_view(name.ptr(), name.length()), false)));
+    }
+    OZ (csv_copy_error(writer.write_separator('\n')));
+  }
+  ObObjPrintParams print;
+  if (OB_SUCC(ret)) {
+    print.tz_info_ = session->get_timezone_info();
+    print.cs_type_ = CS_TYPE_UTF8MB4_BIN;
+    print.use_memcpy_ = true;
+  }
+  while (OB_SUCC(ret) && row_count < top_limit_cnt_) {
+    clear_evaluated_flag();
+    if (OB_FAIL(ctx_.check_status())) {
+    } else if (OB_FAIL(child_->get_next_row())) {
+    } else {
+      for (int64_t i = 0; OB_SUCC(ret) && i < MY_SPEC.select_exprs_.count(); ++i) {
+        ObExpr *expr = MY_SPEC.select_exprs_.at(i);
+        ObDatum *datum = nullptr;
+        ObObj obj;
+        if (i > 0) {
+          OZ (csv_copy_error(writer.write_separator(',')));
+        }
+        OZ (expr->eval(eval_ctx_, datum));
+        OZ (datum->to_obj(obj, expr->obj_meta_, expr->obj_datum_map_));
+        if (OB_SUCC(ret)) {
+          if (obj.is_null()) {
+            OZ (csv_copy_error(writer.write_field(std::string_view(null_marker.get_string().ptr(), null_marker.get_string().length()), false)));
+          } else if (obj.is_string_type() && !obj.is_lob_storage()) {
+            ObEvalCtx::TempAllocGuard guard(eval_ctx_);
+            ObString value = obj.get_string();
+            if (obj.get_collation_type() != CS_TYPE_BINARY) {
+              OZ (ObCharset::charset_convert(guard.get_allocator(), value, obj.get_collation_type(),
+                                               CS_TYPE_UTF8MB4_BIN, value));
+            }
+            OZ (csv_copy_error(writer.write_field(std::string_view(value.ptr(), value.length()), true)));
+          } else if (obj.is_lob_storage()) {
+            ret = OB_NOT_SUPPORTED;
+            LOG_USER_ERROR(OB_NOT_SUPPORTED, "COPY CSV out-of-row LOB");
+          } else {
+            char buf[4096];
+            int64_t size = 0;
+            OZ (obj.print_plain_str_literal(buf, sizeof(buf), size, print));
+            OZ (csv_copy_error(writer.write_field(std::string_view(buf, size), false)));
+          }
+        }
+      }
+      OZ (csv_copy_error(writer.write_separator('\n')));
+      ++row_count;
+    }
+  }
+  if (ret == OB_ITER_END) {
+    ret = OB_SUCCESS;
+  }
+  if (OB_SUCC(ret)) {
+    OZ (csv_copy_error(writer.flush()));
+    OZ (ctx_.check_status());
+    OZ (session->get_file_sql_access(policy_allocator, enabled, allowed));
+    if (OB_SUCC(ret) && !enabled) {
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL while enable_file_sql is OFF");
+    }
+    OZ (csv_copy_error(writer.publish(std::string(allowed.ptr(), allowed.length()))));
+    if (OB_SUCC(ret)) {
+      plan_ctx->set_affected_rows(row_count);
+      ret = OB_ITER_END;
+    }
+  }
+  return ret;
+}
+
 int ObSelectIntoOp::inner_get_next_row()
 {
+  if (MY_SPEC.external_properties_.str_ == file_scan::CSV_COPY_MODE) {
+    return copy_csv_rows();
+  }
   int ret = 0 == top_limit_cnt_ ? OB_ITER_END : OB_SUCCESS;
   int64_t row_count = 0;
   const ObItemType into_type = MY_SPEC.into_type_;
@@ -236,6 +401,12 @@ int ObSelectIntoOp::inner_get_next_row()
 
 int ObSelectIntoOp::inner_get_next_batch(const int64_t max_row_cnt)
 {
+  if (MY_SPEC.external_properties_.str_ == file_scan::CSV_COPY_MODE) {
+    const int result = copy_csv_rows();
+    brs_.size_ = 0;
+    brs_.end_ = result == OB_ITER_END;
+    return brs_.end_ ? OB_SUCCESS : result;
+  }
   int ret = OB_SUCCESS;
   const ObBatchRows *child_brs = NULL;
   int64_t batch_size = min(max_row_cnt, MY_SPEC.max_batch_size_);

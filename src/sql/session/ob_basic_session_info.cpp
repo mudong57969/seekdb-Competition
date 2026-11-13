@@ -4083,6 +4083,32 @@ int ObBasicSessionInfo::get_secure_file_priv(ObString &v) const
   return get_string_sys_var(SYS_VAR_SECURE_FILE_PRIV, v);
 }
 
+int ObBasicSessionInfo::get_file_sql_access(ObIAllocator &alloc, bool &enabled, ObString &allowed) const
+{
+  int ret = OB_SUCCESS;
+  ObSchemaGetterGuard guard;
+  const ObSysVariableSchema *variables = nullptr;
+  const ObSysVarSchema *directory_schema = nullptr;
+  ObObj directory;
+  enabled = false;
+  allowed.reset();
+  if (OB_FAIL(get_bool_sys_var(SYS_VAR_ENABLE_FILE_SQL, enabled))) {
+  } else if (!enabled) {
+  } else if (OB_ISNULL(GCTX.schema_service_)) {
+    ret = OB_NOT_INIT;
+  } else if (OB_FAIL(GCTX.schema_service_->get_runtime_schema_guard(guard))) {
+  } else if (OB_FAIL(guard.get_sys_variable_schema(variables))) {
+  } else if (OB_ISNULL(variables)) {
+    ret = OB_SCHEMA_ERROR;
+  } else if (OB_FAIL(variables->get_sysvar_schema(SYS_VAR_SECURE_FILE_PRIV, directory_schema))) {
+  } else if (OB_ISNULL(directory_schema)) {
+    ret = OB_SCHEMA_ERROR;
+  } else if (OB_FAIL(directory_schema->get_value(&alloc, get_dtc_params(), directory))) {
+  } else if (!directory.is_null() && OB_FAIL(directory.get_varchar(allowed))) {
+  }
+  return ret;
+}
+
 int ObBasicSessionInfo::get_sql_safe_updates(bool &v) const
 {
   return get_bool_sys_var(SYS_VAR_SQL_SAFE_UPDATES, v);

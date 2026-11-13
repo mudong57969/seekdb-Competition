@@ -17,6 +17,9 @@
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/resolver/ddl/ob_explain_resolver.h"
 #include "sql/resolver/ob_resolver.h"
+#include "sql/parser/ob_parser.h"
+#include "sql/resolver/dml/ob_select_stmt.h"
+#include "lib/string/ob_sql_string.h"
 
 using namespace oceanbase;
 using namespace sql;
@@ -26,6 +29,42 @@ const static int64_t EXPLAIN_DISPLAY_OPTION = 1;
 const static int64_t EXPLAIN_INTO_TABLE = 2;
 const static int64_t EXPLAIN_STMT_ID = 3;
 const static int64_t EXPLAIN_CHILD_STMT = 4;
+namespace
+{
+int build_file_schema_query(const ObSelectStmt &select, ObSqlString &sql)
+{
+  int ret = OB_SUCCESS;
+  for (int64_t i = 0; OB_SUCC(ret) && i < select.get_select_item_size(); ++i) {
+    const auto &item = select.get_select_item(i);
+    const char *type = nullptr;
+    switch (item.expr_->get_data_type()) {
+      case ObIntType: type = "BIGINT"; break;
+      case ObTinyIntType: type = "BOOLEAN"; break;
+      case ObDoubleType: type = "DOUBLE"; break;
+      case ObDateType: type = "DATE"; break;
+      case ObDateTimeType: type = "DATETIME"; break;
+      case ObVarcharType: type = "VARCHAR"; break;
+      case ObNumberType: type = "DECIMAL"; break;
+      case ObNullType: type = "NULL"; break;
+      default: type = ob_obj_type_str(item.expr_->get_data_type()); break;
+    }
+    // Encode identifiers as hex literals so file headers cannot introduce SQL.
+    OZ (sql.append(i == 0 ? "SELECT CONVERT(X'" : " UNION ALL SELECT CONVERT(X'"));
+    static constexpr char hex[] = "0123456789abcdef";
+    const auto &name = item.alias_name_;
+    for (int64_t j = 0; OB_SUCC(ret) && j < name.length(); ++j) {
+      const auto byte = static_cast<unsigned char>(name.ptr()[j]);
+      OZ (sql.append_fmt("%c%c", hex[byte >> 4], hex[byte & 15]));
+    }
+    OZ (sql.append_fmt("' USING utf8mb4) AS column_name, '%s' AS column_type, "
+                       "'%s' AS " "\x60null\x60" ", NULL AS " "\x60key\x60" ", NULL AS "
+                       "\x60" "default\x60" ", NULL AS extra",
+                       type, (item.expr_->get_result_flag() & NOT_NULL_FLAG) != 0 ? "NO" : "YES"));
+  }
+  return ret;
+}
+} // namespace
+
 int ObExplainResolver::resolve(const ParseNode &parse_tree)
 {
   int ret = OB_SUCCESS;
@@ -63,10 +102,29 @@ int ObExplainResolver::resolve(const ParseNode &parse_tree)
         ret = OB_ERR_UNEXPECTED;
         LOG_WARN("failed to generate stmt for child stmt");
       } else {
+        if (parse_tree.children_[EXPLAIN_FORMAT] != nullptr && parse_tree.children_[EXPLAIN_FORMAT]->type_ == T_INT && child_stmt->is_select_stmt()
+            && child_stmt->get_query_ctx()->has_file_scan_) {
+          auto &select = *static_cast<ObSelectStmt *>(child_stmt);
+          ObSqlString schema_sql;
+          ParseResult parsed{};
+          ObParser parser(*params_.allocator_, params_.session_info_->get_sql_mode());
+          ObStmt *schema_stmt = nullptr;
+          if (OB_FAIL(build_file_schema_query(select, schema_sql))) {
+          } else if (OB_FAIL(parser.parse(schema_sql.string(), parsed))) {
+          } else if (OB_ISNULL(parsed.result_tree_) || OB_ISNULL(parsed.result_tree_->children_[0])) {
+            ret = OB_ERR_UNEXPECTED;
+          } else if (OB_FAIL(resolver.resolve(ObResolver::IS_NOT_PREPARED_STMT,
+                                              *parsed.result_tree_->children_[0], schema_stmt))) {
+          } else {
+            set_basic_stmt(schema_stmt);
+          }
+          return ret;
+        }
         explain_stmt->set_explain_query_stmt(static_cast<ObDMLStmt *>(child_stmt));
         ParseNode *format = parse_tree.children_[EXPLAIN_FORMAT];
         if (NULL != format) {
           switch (format->type_) {
+          case T_INT: break;
           case T_OUTLINE:
           {
             explain_stmt->set_explain_format(EXPLAIN_OUTLINE);

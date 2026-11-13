@@ -124,6 +124,12 @@ int ObResolverUtils::get_all_function_table_column_names(const TableItem &table_
   ObRawExpr *table_expr = NULL;
   ObPLPackageGuard *package_guard = nullptr;
   const ObUserDefinedType *user_type = NULL;
+  if (table_item.file_columns_ != nullptr) {
+    for (int64_t i = 0; OB_SUCC(ret) && i < table_item.file_column_count_; ++i) {
+      OZ (column_names.push_back(table_item.file_columns_[i]));
+    }
+    return ret;
+  }
   ObExecContext *exec_ctx = params.session_info_->get_cur_exec_ctx();
   CK (OB_NOT_NULL(exec_ctx));
   OZ (exec_ctx->get_package_guard(package_guard));

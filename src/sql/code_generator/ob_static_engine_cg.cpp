@@ -5500,7 +5500,9 @@ int ObStaticEngineCG::generate_spec(ObLogFunctionTable &op, ObFunctionTableSpec 
   ObRawExpr *value_raw_expr = nullptr;
   ObExpr *value_expr = nullptr;
   int ret = OB_SUCCESS;
-  if (OB_ISNULL(op.get_stmt())) {
+  const TableItem *table = nullptr;
+  if (OB_ISNULL(op.get_stmt()) ||
+      OB_ISNULL(table = op.get_stmt()->get_table_item_by_id(op.get_table_id()))) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(spec.column_exprs_.init(op.get_stmt()->get_column_size()))) {
   } else if (OB_UNLIKELY(op.get_num_of_child() > 1)) {
@@ -5511,6 +5513,20 @@ int ObStaticEngineCG::generate_spec(ObLogFunctionTable &op, ObFunctionTableSpec 
   } else {
     spec.has_correlated_expr_ = value_raw_expr->has_flag(CNT_DYNAMIC_PARAM);
     spec.value_expr_ = value_expr;
+    if (!table->file_identity_.empty()) {
+      OZ (ob_write_string(alloc, table->file_identity_, spec.file_identity_));
+      OX (spec.file_width_ = table->file_column_count_);
+      OZ (spec.file_column_indexes_.init(table->file_column_count_));
+      if (table->file_identity_.prefix_match("ndjson:") || table->file_identity_.prefix_match("json:")
+          || table->file_identity_.prefix_match("glob:")) {
+        OZ (spec.file_column_names_.init(table->file_column_count_));
+        for (int64_t i = 0; OB_SUCC(ret) && i < table->file_column_count_; ++i) {
+          ObString name;
+          OZ (ob_write_string(alloc, table->file_columns_[i], name));
+          OZ (spec.file_column_names_.push_back(name));
+        }
+      }
+    }
     for (int64_t i = 0; OB_SUCC(ret) && i < op.get_output_exprs().count(); ++i) {
       if (OB_FAIL(mark_expr_self_produced(op.get_output_exprs().at(i)))) {
       }
@@ -5526,6 +5542,11 @@ int ObStaticEngineCG::generate_spec(ObLogFunctionTable &op, ObFunctionTableSpec 
         OZ (mark_expr_self_produced(col_item->expr_));
         OZ (generate_rt_expr(*col_item->expr_, rt_expr));
         OZ (spec.column_exprs_.push_back(rt_expr));
+        if (OB_SUCC(ret) && !spec.file_identity_.empty()) {
+          const uint64_t index = col_item->column_id_ - OB_APP_MIN_COLUMN_ID;
+          CK (index < static_cast<uint64_t>(spec.file_width_));
+          OZ (spec.file_column_indexes_.push_back(index));
+        }
       }
     }
   }

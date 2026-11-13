@@ -16,8 +16,13 @@
 
 #define USING_LOG_PREFIX SQL_ENG
 
+#include <charconv>
+
 #include "sql/engine/basic/ob_function_table_op.h"
 #include "sql/engine/ob_exec_context.h"
+#include "sql/engine/basic/file_scan/file_csv_reader.h"
+#include "sql/session/ob_sql_session_info.h"
+#include <new>
 #include "sql/engine/expr/ob_expr_lob_utils.h"
 
 
@@ -27,14 +32,161 @@ using namespace common;
 namespace sql
 {
 
-OB_SERIALIZE_MEMBER((ObFunctionTableSpec, ObOpSpec), value_expr_, column_exprs_, has_correlated_expr_);
+OB_SERIALIZE_MEMBER((ObFunctionTableSpec, ObOpSpec), value_expr_, column_exprs_, has_correlated_expr_,
+                    file_identity_, file_width_, file_column_indexes_, file_column_names_);
+
+struct CsvScanState {
+  file_scan::CsvReader reader_;
+  std::vector<file_scan::Row> rows_;
+};
+
+int ObFunctionTableOp::open_csv()
+{
+  close_csv();
+  int ret = OB_SUCCESS;
+  bool enabled = false;
+  ObArenaAllocator policy_allocator(ObModIds::OB_SQL_SESSION);
+  ObString allowed;
+  ObDatum *path = nullptr;
+  ObSQLSessionInfo *session = ctx_.get_my_session();
+  if (OB_ISNULL(session) || OB_ISNULL(MY_SPEC.value_expr_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(ctx_.check_status())) {
+  } else if (OB_FAIL(session->get_file_sql_access(policy_allocator, enabled, allowed))) {
+  } else if (!enabled) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL while enable_file_sql is OFF");
+  } else if (OB_FAIL(MY_SPEC.value_expr_->eval(eval_ctx_, path))) {
+  } else if (OB_ISNULL(path) || path->is_null() || path->get_string().empty()) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_USER_ERROR(OB_INVALID_ARGUMENT, "read_csv path");
+  } else if (OB_ISNULL(csv_ = new (std::nothrow) CsvScanState())) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else {
+    const ObString &filename = path->get_string();
+    const std::string directory = allowed.empty() ? std::string()
+        : std::string(allowed.ptr(), allowed.length());
+    const std::string identity(MY_SPEC.file_identity_.ptr(), MY_SPEC.file_identity_.length());
+    const auto format = file_scan::format_from_identity(identity);
+    std::vector<std::string> names;
+    for (int64_t i = 0; i < MY_SPEC.file_column_names_.count(); ++i) {
+      const auto &name = MY_SPEC.file_column_names_.at(i);
+      names.emplace_back(name.ptr(), name.length());
+    }
+    if (!csv_->reader_.open(enabled, directory, std::string(filename.ptr(), filename.length()), format,
+          [](void *context) { return OB_SUCCESS == static_cast<ObExecContext *>(context)->check_status(); },
+          &ctx_)) {
+      if (OB_SUCC(ret = ctx_.check_status())) {
+        ret = OB_ERR_NO_PRIVILEGE;
+        LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, "secure_file_priv");
+      }
+    } else if (!csv_->reader_.start_scan(identity, MY_SPEC.file_width_, names,
+          [](void *context) { return OB_SUCCESS == static_cast<ObExecContext *>(context)->check_status(); },
+          &ctx_)) {
+      if (OB_SUCC(ret = ctx_.check_status())) {
+        ret = OB_INVALID_ARGUMENT;
+        LOG_USER_ERROR(OB_INVALID_ARGUMENT, csv_->reader_.error().c_str());
+      }
+    }
+  }
+  if (OB_FAIL(ret)) {
+    close_csv();
+  }
+  return ret;
+}
+
+void ObFunctionTableOp::close_csv()
+{
+  delete csv_;
+  csv_ = nullptr;
+}
+
+int ObFunctionTableOp::inner_get_next_row_csv()
+{
+  int ret = OB_SUCCESS;
+  clear_evaluated_flag();
+  if (OB_ISNULL(csv_)) {
+    ret = OB_NOT_INIT;
+  } else if (OB_FAIL(ctx_.check_status())) {
+  } else if (!csv_->reader_.next_batch(1, csv_->rows_, [](void *context) {
+    return static_cast<ObExecContext *>(context)->check_status() == OB_SUCCESS;
+  }, &ctx_)) {
+    if (OB_SUCC(ret = ctx_.check_status())) {
+      ret = OB_INVALID_ARGUMENT;
+      LOG_USER_ERROR(OB_INVALID_ARGUMENT, csv_->reader_.error().c_str());
+    }
+  } else if (csv_->rows_.empty()) {
+    ret = OB_ITER_END;
+  } else {
+    const auto &row = csv_->rows_.front();
+    for (int64_t i = 0; OB_SUCC(ret) && i < MY_SPEC.column_exprs_.count(); ++i) {
+      ObExpr *expr = MY_SPEC.column_exprs_.at(i);
+      const auto &field = row[MY_SPEC.file_column_indexes_.at(i)];
+      ObDatum &datum = expr->locate_datum_for_write(eval_ctx_);
+      if (field.is_null) {
+        datum.set_null();
+      } else if (expr->datum_meta_.type_ == ObVarcharType) {
+        datum.set_string(ObString(field.value.size(), field.value.data()));
+      } else if (expr->datum_meta_.type_ == ObNumberType) {
+        ObNumStackOnceAlloc allocator;
+        number::ObNumber value;
+        OZ (value.from(field.value.data(), field.value.size(), allocator, nullptr, nullptr, false));
+        OX (datum.set_number(value));
+      } else if (expr->datum_meta_.type_ == ObDoubleType && MY_SPEC.file_identity_.prefix_match("parquet:")) {
+        double value = 0;
+        const auto *end = field.value.data() + field.value.size();
+        const auto parsed = std::from_chars(field.value.data(), end, value);
+        if (parsed.ec != std::errc{} || parsed.ptr != end) {
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, "invalid Parquet floating-point value");
+        } else {
+          datum.set_double(value);
+        }
+      } else {
+        file_scan::Type type = file_scan::Type::Null;
+        switch (expr->datum_meta_.type_) {
+          case ObIntType: type = file_scan::Type::Integer; break;
+          case ObDoubleType: type = file_scan::Type::Double; break;
+          case ObTinyIntType: type = file_scan::Type::Boolean; break;
+          case ObDateType: type = file_scan::Type::Date; break;
+          case ObDateTimeType: type = file_scan::Type::DateTime; break;
+          default: break;
+        }
+        file_scan::Scalar value;
+        if (!file_scan::parse_scalar(type, field.value, value)) {
+          ret = OB_INVALID_ARGUMENT;
+          LOG_USER_ERROR(OB_INVALID_ARGUMENT, "read_csv column type changed");
+        } else {
+          switch (type) {
+            case file_scan::Type::Integer:
+            case file_scan::Type::Boolean: datum.set_int(value.integer); break;
+            case file_scan::Type::Double: datum.set_double(value.real); break;
+            case file_scan::Type::Date: datum.set_date(value.integer); break;
+            case file_scan::Type::DateTime: datum.set_datetime(value.integer); break;
+            default: ret = OB_ERR_UNEXPECTED; break;
+          }
+        }
+      }
+      if (OB_SUCC(ret)) {
+        expr->set_evaluated_projected(eval_ctx_);
+      }
+    }
+  }
+  if (OB_SUCCESS != ret && OB_ITER_END != ret) {
+    close_csv();
+  }
+  return ret;
+}
 
 int ObFunctionTableOp::inner_open()
 {
   int ret = OB_SUCCESS;
   node_idx_ = 0;
   already_calc_ = false;
-  if (OB_ISNULL(MY_SPEC.value_expr_)) {
+  if (!MY_SPEC.file_identity_.empty()) {
+    next_row_func_ = &ObFunctionTableOp::inner_get_next_row_csv;
+    ret = open_csv();
+  } else if (OB_ISNULL(MY_SPEC.value_expr_)) {
     ret = OB_ERR_UNEXPECTED;
   } else if (ObExtendType == MY_SPEC.value_expr_->datum_meta_.type_) {
     next_row_func_ = &ObFunctionTableOp::inner_get_next_row_udf;
@@ -50,7 +202,10 @@ int ObFunctionTableOp::inner_rescan()
   if (OB_FAIL(ObOperator::inner_rescan())) {
   } else {
     node_idx_ = 0;
-    if (MY_SPEC.has_correlated_expr_) {
+    if (!MY_SPEC.file_identity_.empty()) {
+      clear_evaluated_flag();
+      ret = open_csv();
+    } else if (MY_SPEC.has_correlated_expr_) {
       row_count_ = 0;
       col_count_ = 0;
       value_table_ = NULL;
@@ -63,6 +218,7 @@ int ObFunctionTableOp::inner_rescan()
 int ObFunctionTableOp::inner_close()
 {
   int ret = OB_SUCCESS;
+  close_csv();
   node_idx_ = 0;
   row_count_ = 0;
   col_count_ = 0;
@@ -72,6 +228,7 @@ int ObFunctionTableOp::inner_close()
 
 void ObFunctionTableOp::destroy()
 {
+  close_csv();
   ObOperator::destroy();
 }
 

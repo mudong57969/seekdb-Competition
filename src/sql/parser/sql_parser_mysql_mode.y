@@ -41,7 +41,6 @@
 #include "../../../src/sql/parser/sql_parser_base.h"
 
 #define GEN_EXPLAN_STMT(no_use, explain_stmt, explain_type, display_type, stmt, into_table, set_statement_id) \
-  (void)(no_use); \
   ParseNode *type_node = NULL; \
   ParseNode *display_node = NULL; \
   if (0 != explain_type) { \
@@ -51,7 +50,10 @@
     malloc_terminal_node(display_node, result->malloc_pool_, display_type); \
   } \
   malloc_non_terminal_node(explain_stmt, result->malloc_pool_, T_EXPLAIN, 5, \
-                           type_node, display_node, into_table, set_statement_id, stmt);
+                           type_node, display_node, into_table, set_statement_id, stmt); \
+  if ((no_use) != NULL && type_node == NULL && display_node == NULL) { \
+    explain_stmt->children_[0] = (no_use); \
+  }
 %}
 
 %destructor {destroy_tree($$);}<node>
@@ -292,7 +294,7 @@ END_P SET_VAR DELIMITER
         GENERAL GEOMETRY GEOMCOLLECTION GEOMETRYCOLLECTION GET_FORMAT GLOBAL GRANTS GROUP_CONCAT GROUPING
         GLOBAL_ALIAS
 
-        HASH HEAP HELP HISTOGRAM HOUR HIDDEN HYBRID HYBRID_HIST HYBRID_SEARCH
+        HASH HEAP HELP HISTOGRAM HOUR HIDDEN HYBRID HYBRID_HIST HYBRID_SEARCH READ_CSV READ_NDJSON READ_JSON READ_PARQUET FILE_GLOB CSV HEADER NULLSTR
 
         IDENTIFIED IK_MODE ILOG IMMEDIATE IMPORT INCLUDING INCR INDEXES INFO
         INNODB INPLACE INSERT_METHOD INSTANT INSTANCE INVOKER IO IO_THREAD IPC ISOLATE ISOLATION ISSUER
@@ -515,6 +517,8 @@ END_P SET_VAR DELIMITER
 %type <node> algorithm_opt lock_opt
 %type <node> flush_privileges_stmt opt_flush_privileges_scope
 %start sql_stmt
+%type <node> copy_to_stmt
+%type <node> read_csv_table file_csv_options file_csv_option
 %%
 ////////////////////////////////////////////////////////////////
 sql_stmt:
@@ -556,6 +560,7 @@ opt_end_p:
 /* only preparable statement will set question mark size */
 stmt:
     select_stmt             { $$ = $1; question_mark_issue($$, result); }
+  | copy_to_stmt            { $$ = $1; }
   | insert_stmt             { $$ = $1; question_mark_issue($$, result); }
   | create_table_stmt       {
     $$ = $1;
@@ -8428,6 +8433,40 @@ expr { $$ = $1;}
  *
  *****************************************************************************/
 
+copy_to_stmt:
+COPY select_with_parens TO STRING_VALUE WITH '(' FORMAT CSV ',' HEADER BOOL_VALUE ')'
+  {
+    $$ = $2;
+    if ($$->children_[PARSE_SELECT_INTO] != NULL || $$->children_[PARSE_SELECT_INTO_EXTRA] != NULL
+        || $$->children_[PARSE_SELECT_FOR_UPD] != NULL) {
+      yyerror(&@2, result, "COPY requires a read-only SELECT without INTO");
+      YYERROR;
+    }
+    ParseNode *into = NULL;
+    malloc_non_terminal_node(into, result->malloc_pool_, T_INTO_OUTFILE, 2, $4, $11);
+    into->value_ = 1;
+    $$->children_[PARSE_SELECT_INTO_EXTRA] = into;
+    question_mark_issue($$, result);
+  }
+| COPY select_with_parens TO STRING_VALUE '(' FORMAT CSV ',' HEADER ',' NULLSTR STRING_VALUE ')'
+  {
+    $$ = $2;
+    if ($$->children_[PARSE_SELECT_INTO] != NULL || $$->children_[PARSE_SELECT_INTO_EXTRA] != NULL
+        || $$->children_[PARSE_SELECT_FOR_UPD] != NULL) {
+      yyerror(&@2, result, "COPY requires a read-only SELECT without INTO");
+      YYERROR;
+    }
+    ParseNode *into = NULL;
+    ParseNode *header = NULL;
+    malloc_terminal_node(header, result->malloc_pool_, T_BOOL);
+    header->value_ = 1;
+    malloc_non_terminal_node(into, result->malloc_pool_, T_INTO_OUTFILE, 3, $4, header, $12);
+    into->value_ = 1;
+    $$->children_[PARSE_SELECT_INTO_EXTRA] = into;
+    question_mark_issue($$, result);
+  }
+;
+
 select_stmt:
 select_no_parens opt_when
 {
@@ -10792,6 +10831,10 @@ tbl_name
 {
   $$ = $1;
 }
+| read_csv_table
+{
+  $$ = $1;
+}
 | table_subquery
 {
   $$ = $1;
@@ -10847,6 +10890,175 @@ tbl_name
 | hybrid_search_expr
 {
   $$ = $1;
+}
+;
+
+read_csv_table:
+READ_CSV '(' STRING_VALUE ')'
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+}
+| READ_CSV '(' STRING_VALUE ')' relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $5);
+}
+| READ_CSV '(' STRING_VALUE ')' AS relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $6);
+}
+| READ_CSV '(' STRING_VALUE ',' file_csv_options ')'
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 2, $3, $5);
+  $5->is_tree_not_param_ = true;
+  $$ = table;
+}
+| READ_CSV '(' STRING_VALUE ',' file_csv_options ')' relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 2, $3, $5);
+  $5->is_tree_not_param_ = true;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $7);
+}
+| READ_CSV '(' STRING_VALUE ',' file_csv_options ')' AS relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 2, $3, $5);
+  $5->is_tree_not_param_ = true;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $8);
+}
+| READ_NDJSON '(' STRING_VALUE ')'
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  $$->str_value_ = "ndjson";
+  $$->str_len_ = 6;
+}
+| READ_NDJSON '(' STRING_VALUE ')' relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  table->str_value_ = "ndjson";
+  table->str_len_ = 6;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $5);
+}
+| READ_NDJSON '(' STRING_VALUE ')' AS relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  table->str_value_ = "ndjson";
+  table->str_len_ = 6;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $6);
+}
+| READ_JSON '(' STRING_VALUE ')'
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  $$->str_value_ = "json";
+  $$->str_len_ = 4;
+}
+| READ_JSON '(' STRING_VALUE ')' relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  table->str_value_ = "json";
+  table->str_len_ = 4;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $5);
+}
+| READ_JSON '(' STRING_VALUE ')' AS relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  table->str_value_ = "json";
+  table->str_len_ = 4;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $6);
+}
+| READ_JSON '(' STRING_VALUE ',' FORMAT COMP_EQ STRING_VALUE ')'
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 2, $3, $7);
+  $7->is_tree_not_param_ = true;
+  table->str_value_ = "json_options";
+  table->str_len_ = 12;
+  $$ = table;
+}
+| READ_JSON '(' STRING_VALUE ',' FORMAT COMP_EQ STRING_VALUE ')' relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 2, $3, $7);
+  $7->is_tree_not_param_ = true;
+  table->str_value_ = "json_options";
+  table->str_len_ = 12;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $9);
+}
+| READ_JSON '(' STRING_VALUE ',' FORMAT COMP_EQ STRING_VALUE ')' AS relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 2, $3, $7);
+  $7->is_tree_not_param_ = true;
+  table->str_value_ = "json_options";
+  table->str_len_ = 12;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $10);
+}
+| READ_PARQUET '(' STRING_VALUE ')'
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  $$->str_value_ = "parquet";
+  $$->str_len_ = 7;
+}
+| READ_PARQUET '(' STRING_VALUE ')' relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  table->str_value_ = "parquet";
+  table->str_len_ = 7;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $5);
+}
+| READ_PARQUET '(' STRING_VALUE ')' AS relation_name
+{
+  ParseNode *table = NULL;
+  malloc_non_terminal_node(table, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  table->str_value_ = "parquet";
+  table->str_len_ = 7;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ALIAS, 2, table, $6);
+}
+| FILE_GLOB '(' STRING_VALUE ')'
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_READ_CSV_TABLE, 1, $3);
+  $$->str_value_ = "glob";
+  $$->str_len_ = 4;
+}
+;
+
+file_csv_options:
+file_csv_option { $$ = $1; }
+| file_csv_options ',' file_csv_option
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_LINK_NODE, 2, $1, $3);
+}
+;
+
+file_csv_option:
+HEADER COMP_EQ BOOL_VALUE
+{
+  ParseNode *name = NULL;
+  get_non_reserved_node(name, result->malloc_pool_, @1.first_column, @1.last_column);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ASSIGN_ITEM, 2, name, $3);
+}
+| NAME_OB COMP_EQ BOOL_VALUE
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ASSIGN_ITEM, 2, $1, $3);
+}
+| NAME_OB COMP_EQ INTNUM
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ASSIGN_ITEM, 2, $1, $3);
+}
+| NAME_OB COMP_EQ '-' INTNUM
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_ASSIGN_ITEM, 2, $1, $4);
+  $$->value_ = 1;
 }
 ;
 
@@ -12306,7 +12518,7 @@ explain_or_desc relation_factor opt_desc_column_option
 
 explain_or_desc:
 EXPLAIN {$$ = NULL;}
-| DESCRIBE {$$ = NULL;}
+| DESCRIBE {malloc_terminal_node($$, result->malloc_pool_, T_INT);}
 | DESC  {$$ = NULL;}
 ;
 
@@ -16361,6 +16573,22 @@ NAME_OB
 {
   $$ = $1;
 }
+| CSV
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
+}
+| HEADER
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
+}
+| NULLSTR
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
+}
+| READ_CSV
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
+}
 | DUMP
 {
   make_name_node($$, result->malloc_pool_, "dump");
@@ -16444,6 +16672,22 @@ NAME_OB
 | MODEL
 {
   make_name_node($$, result->malloc_pool_, "model");
+}
+| READ_NDJSON
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
+}
+| READ_JSON
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
+}
+| READ_PARQUET
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
+}
+| FILE_GLOB
+{
+  get_non_reserved_node($$, result->malloc_pool_, @1.first_column, @1.last_column);
 }
 ;
 
@@ -17492,6 +17736,14 @@ unreserved_keyword_normal { $$=$1;}
 
 unreserved_keyword_normal:
 ACCOUNT
+| READ_CSV
+| CSV
+| HEADER
+| NULLSTR
+| READ_PARQUET
+| FILE_GLOB
+| READ_JSON
+| READ_NDJSON
 |       ACTION
 |       ACTIVE
 |       ADDDATE

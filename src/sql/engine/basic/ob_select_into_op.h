@@ -196,6 +196,7 @@ public:
 
 private:
   int init_env_common();
+  int copy_csv_rows();
   int init_csv_env();
   void set_csv_format_options();
 

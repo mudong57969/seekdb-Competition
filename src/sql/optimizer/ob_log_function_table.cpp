@@ -93,9 +93,13 @@ int ObLogFunctionTable::get_plan_item_info(PlanText &plan_text,
                      name.length(), 
                      plan_item.object_alias_, 
                      plan_item.object_alias_len_);
-    BUF_PRINT_STR("FUNCTION TABLE",
-                  plan_item.object_type_,
-                  plan_item.object_type_len_);
+    const TableItem *table = get_stmt()->get_table_item_by_id(get_table_id());
+    if (table != nullptr && !table->file_identity_.empty()) {
+      BUF_PRINT_STR("FILE SCAN", plan_item.operation_, plan_item.operation_len_);
+      BUF_PRINT_STR("FILE SCAN", plan_item.object_type_, plan_item.object_type_len_);
+    } else {
+      BUF_PRINT_STR("FUNCTION TABLE", plan_item.object_type_, plan_item.object_type_len_);
+    }
   }
   return ret;
 }
