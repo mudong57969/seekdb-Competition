@@ -100,7 +100,8 @@ public:
   bool infer(std::vector<Column> &columns, Continue should_continue = nullptr, void *context = nullptr);
   bool start_scan(const std::string &expected_identity, std::size_t width,
                   const std::vector<std::string> &names = {},
-                  Continue should_continue = nullptr, void *context = nullptr);
+                  Continue should_continue = nullptr, void *context = nullptr,
+                  const std::vector<std::size_t> *parquet_projection = nullptr);
   bool rescan();
   // An empty batch indicates EOF. On error the batch is discarded.
   bool next_batch(std::size_t max_rows, std::vector<Row> &rows,
@@ -110,7 +111,8 @@ public:
 
 private:
   enum class Result { Row, Eof, Error };
-  Result read_record(Row &row);
+  Result read_record(Row &row, std::size_t expected_width = 0);
+  Result csv_error(const char *message, std::size_t field, long byte, std::size_t line);
   using Object = std::vector<std::pair<std::string, Field>>;
   Result read_object(Object &object, Continue should_continue, void *context);
   bool parse_object(const std::string &record, Object &object);
@@ -154,6 +156,9 @@ private:
   std::unordered_map<std::string, std::size_t> json_indexes_;
   std::FILE *file_ = nullptr;
   long data_offset_ = -1;
+  std::size_t csv_record_ = 0;
+  std::size_t csv_line_ = 1;
+  std::size_t csv_data_line_ = 1;
   std::size_t width_ = 0;
   std::string identity_;
   std::string error_;

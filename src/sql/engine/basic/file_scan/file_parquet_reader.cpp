@@ -1212,6 +1212,7 @@ struct ParquetReader::State {
   PageCallback trace;
   Metadata metadata;
   std::vector<ColumnReader> readers;
+  std::vector<std::size_t> projection;
   std::size_t group = 0;
   int64_t row = 0;
 };
@@ -1232,6 +1233,9 @@ bool ParquetReader::open(int fd, CsvReader::Continue should_continue, void *cont
     auto state = std::make_unique<State>(fd, trace);
     state->input.set_cancel(should_continue, context);
     state->metadata = read_metadata(state->input);
+    for (std::size_t i = 0; i < state->metadata.columns.size(); ++i) {
+      state->projection.push_back(i);
+    }
     state_ = std::move(state);
     return true;
   } catch (const std::exception &error) {
@@ -1278,6 +1282,22 @@ bool ParquetReader::infer_schema(std::vector<file_scan::Column> &columns)
   }
 }
 
+bool ParquetReader::set_projection(const std::vector<std::size_t> &indexes)
+{
+  if (!state_ || state_->group != 0 || state_->row != 0
+      || std::any_of(indexes.begin(), indexes.end(), [&](std::size_t index) {
+           return index >= state_->metadata.columns.size();
+         })) {
+    error_ = "invalid Parquet projection";
+    return false;
+  }
+  state_->projection = indexes;
+  std::sort(state_->projection.begin(), state_->projection.end());
+  state_->projection.erase(std::unique(state_->projection.begin(), state_->projection.end()),
+                           state_->projection.end());
+  return true;
+}
+
 bool ParquetReader::next_row(Row &row, CsvReader::Continue should_continue, void *context)
 {
   row.clear();
@@ -1301,14 +1321,17 @@ bool ParquetReader::next_row(Row &row, CsvReader::Continue should_continue, void
         state.row = 0;
         continue;
       }
-      if (state.readers.empty()) {
-        state.readers.reserve(group.columns.size());
-        for (std::size_t i = 0; i < group.columns.size(); ++i) {
-          state.readers.emplace_back(state.input, state.metadata.columns[i], group.columns[i], state.trace);
+      if (state.row == 0) {
+        state.readers.reserve(state.projection.size());
+        for (const auto index : state.projection) {
+          state.readers.emplace_back(state.input, state.metadata.columns[index], group.columns[index], state.trace);
         }
       }
-      for (std::size_t i = 0; i < state.readers.size(); ++i) {
-        row.push_back(to_field(state.readers[i].next(), state.metadata.columns[i]));
+      // A zero-column scan still emits one nonempty row per footer row.
+      row.resize(state.projection.empty() ? 1 : group.columns.size(), Field{{}, true});
+      for (std::size_t i = 0; i < state.projection.size(); ++i) {
+        const auto index = state.projection[i];
+        row[index] = to_field(state.readers[i].next(), state.metadata.columns[index]);
       }
       ++state.row;
       if (state.row == group.rows) {
@@ -1359,6 +1382,7 @@ bool ParquetReader::open(int, CsvReader::Continue, void *, PageCallback)
   return false;
 }
 bool ParquetReader::infer_schema(std::vector<Column> &) { return false; }
+bool ParquetReader::set_projection(const std::vector<std::size_t> &) { return false; }
 bool ParquetReader::next_row(Row &, CsvReader::Continue, void *) { return false; }
 bool ParquetReader::rescan() { return false; }
 void ParquetReader::close() {}

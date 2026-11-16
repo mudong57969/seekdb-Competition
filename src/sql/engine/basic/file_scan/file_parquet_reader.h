@@ -35,6 +35,8 @@ public:
   bool open(int fd, CsvReader::Continue should_continue = nullptr, void *context = nullptr,
             PageCallback trace = nullptr);
   bool infer_schema(std::vector<Column> &columns);
+  // Set before decoding. Omitted fields keep their physical ordinals.
+  bool set_projection(const std::vector<std::size_t> &indexes);
   // A successful empty row indicates EOF.
   bool next_row(Row &row, CsvReader::Continue should_continue = nullptr, void *context = nullptr);
   bool rescan();

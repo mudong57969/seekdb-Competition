@@ -73,6 +73,13 @@ int ObFunctionTableOp::open_csv()
       const auto &name = MY_SPEC.file_column_names_.at(i);
       names.emplace_back(name.ptr(), name.length());
     }
+    std::vector<std::size_t> projection;
+    if (format == file_scan::Format::Parquet) {
+      projection.reserve(MY_SPEC.file_column_indexes_.count());
+      for (int64_t i = 0; i < MY_SPEC.file_column_indexes_.count(); ++i) {
+        projection.push_back(MY_SPEC.file_column_indexes_.at(i));
+      }
+    }
     if (!csv_->reader_.open(enabled, directory, std::string(filename.ptr(), filename.length()), format,
           [](void *context) { return OB_SUCCESS == static_cast<ObExecContext *>(context)->check_status(); },
           &ctx_)) {
@@ -82,7 +89,7 @@ int ObFunctionTableOp::open_csv()
       }
     } else if (!csv_->reader_.start_scan(identity, MY_SPEC.file_width_, names,
           [](void *context) { return OB_SUCCESS == static_cast<ObExecContext *>(context)->check_status(); },
-          &ctx_)) {
+          &ctx_, format == file_scan::Format::Parquet ? &projection : nullptr)) {
       if (OB_SUCC(ret = ctx_.check_status())) {
         ret = OB_INVALID_ARGUMENT;
         LOG_USER_ERROR(OB_INVALID_ARGUMENT, csv_->reader_.error().c_str());

@@ -130,32 +130,38 @@ std::FILE *open_regular_file(const std::string &directory, const std::string &pa
 }
 #endif
 
-bool valid_utf8(std::string_view value)
+std::size_t invalid_utf8(std::string_view value)
 {
   for (std::size_t pos = 0; pos < value.size();) {
+    const auto start = pos;
     const auto lead = static_cast<unsigned char>(value[pos++]);
     if (lead < 0x80) {
       continue;
     }
     if (lead < 0xc2 || lead > 0xf4) {
-      return false;
+      return start;
     }
     const unsigned count = lead < 0xe0 ? 1 : lead < 0xf0 ? 2 : 3;
     if (value.size() - pos < count) {
-      return false;
+      return start;
     }
     const auto second = static_cast<unsigned char>(value[pos]);
     if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
         || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90)) {
-      return false;
+      return start;
     }
     for (unsigned i = 0; i < count; ++i) {
       if ((static_cast<unsigned char>(value[pos++]) & 0xc0) != 0x80) {
-        return false;
+        return start;
       }
     }
   }
-  return true;
+  return value.npos;
+}
+
+bool valid_utf8(std::string_view value)
+{
+  return invalid_utf8(value) == value.npos;
 }
 
 template <typename Number>
@@ -956,66 +962,95 @@ bool CsvReader::check_identity()
                                      : "CSV file changed or its identity is unavailable");
 }
 
-CsvReader::Result CsvReader::read_record(Row &row)
+CsvReader::Result CsvReader::csv_error(const char *message, std::size_t field, long byte,
+                                              std::size_t line)
+{
+  error_ = std::string(message) + " (record " + std::to_string(csv_record_) + ", line "
+      + std::to_string(line) + ", field " + std::to_string(field) + ", byte "
+      + std::to_string(byte) + ")";
+  return Result::Error;
+}
+
+CsvReader::Result CsvReader::read_record(Row &row, std::size_t expected_width)
 {
   enum class State { Start, Bare, Quoted, Closed };
   State state = State::Start;
   bool quoted = false;
   std::string field;
   std::size_t bytes = 0;
+  const long record_start = std::ftell(file_);
+  ++csv_record_;
   row.clear();
+  long field_start = record_start;
+  std::size_t field_line = csv_line_;
   const auto append = [&] {
-    if (row.size() >= MAX_COLUMNS || !valid_utf8(field)) {
-      return fail("CSV has too many columns or invalid UTF-8");
+    const auto invalid = invalid_utf8(field);
+    if (invalid != field.npos) {
+      const auto end = field.begin() + invalid;
+      const auto extra_quotes = quoted ? 1 + std::count(field.begin(), end, '"') : 0;
+      return csv_error("CSV invalid UTF-8", row.size() + 1, field_start + invalid + extra_quotes,
+                       field_line + std::count(field.begin(), end, '\n'));
+    }
+    if (row.size() >= MAX_COLUMNS) {
+      return csv_error("CSV has too many columns", row.size() + 1, field_start, field_line);
     }
     const bool is_null = !quoted && (field.empty() || field == "NULL");
     row.push_back({std::move(field), is_null});
     field.clear();
     state = State::Start;
     quoted = false;
-    return true;
+    return Result::Row;
+  };
+  const auto finish = [&](long offset) {
+    const auto result = append();
+    if (result == Result::Row && expected_width != 0 && row.size() < expected_width) {
+      return csv_error("CSV row width differs from header", row.size() + 1, offset, csv_line_);
+    }
+    return result;
   };
   for (;;) {
     const int ch = std::fgetc(file_);
+    const long offset = record_start + static_cast<long>(bytes);
     if (ch == EOF) {
       if (std::ferror(file_) || state == State::Quoted) {
-        fail("CSV read error or unterminated quoted field");
-        return Result::Error;
+        return csv_error("CSV read error or unterminated quoted field", row.size() + 1, offset, csv_line_);
       }
-      if (bytes == 0) {
-        return Result::Eof;
-      }
-      return append() ? Result::Row : Result::Error;
+      return bytes == 0 ? Result::Eof : finish(offset);
     }
     if (++bytes > MAX_RECORD_BYTES || ch == '\0') {
-      fail("CSV record is too large or contains a NUL byte");
-      return Result::Error;
+      return csv_error("CSV record is too large or contains a NUL byte", row.size() + 1, offset, csv_line_);
     }
     if (state == State::Quoted) {
       if (ch == '"') {
         state = State::Closed;
       } else {
         field.push_back(static_cast<char>(ch));
+        csv_line_ += ch == '\n';
       }
     } else if (state == State::Closed && ch == '"') {
       field.push_back('"');
       state = State::Quoted;
     } else if (ch == ',') {
-      if (!append()) {
+      if (append() == Result::Error) {
         return Result::Error;
+      }
+      field_start = offset + 1;
+      field_line = csv_line_;
+      if (row.size() == expected_width) {
+        return csv_error("CSV row width differs from header", row.size() + 1, field_start, field_line);
       }
     } else if (ch == '\n' || ch == '\r') {
       if (ch == '\r' && std::fgetc(file_) != '\n') {
-        fail("CSV carriage return must be followed by line feed");
-        return Result::Error;
+        return csv_error("CSV carriage return must be followed by line feed", row.size() + 1, offset, csv_line_);
       }
-      return append() ? Result::Row : Result::Error;
+      const auto result = finish(offset);
+      ++csv_line_;
+      return result;
     } else if (state == State::Start && ch == '"') {
       state = State::Quoted;
       quoted = true;
     } else if (state == State::Closed || ch == '"') {
-      fail("invalid CSV quote");
-      return Result::Error;
+      return csv_error("invalid CSV quote", row.size() + 1, offset, csv_line_);
     } else {
       state = State::Bare;
       field.push_back(static_cast<char>(ch));
@@ -1329,8 +1364,11 @@ bool CsvReader::infer(std::vector<Column> &columns, Continue should_continue, vo
       && std::fseek(file_, 0, SEEK_SET) != 0) {
     return fail("cannot seek to CSV header");
   }
+  csv_record_ = 0;
+  csv_line_ = 1;
   Row row;
   const Result header = read_record(row);
+  csv_data_line_ = csv_line_;
   if (header == Result::Eof && glob_member_) {
     data_offset_ = 0;
     return rescan();
@@ -1353,12 +1391,9 @@ bool CsvReader::infer(std::vector<Column> &columns, Continue should_continue, vo
   }
   std::vector<bool> double_compatible(inferred.size(), true);
   Result result;
-  while ((result = read_record(row)) == Result::Row) {
+  while ((result = read_record(row, inferred.size())) == Result::Row) {
     if (should_continue != nullptr && !should_continue(context)) {
       return fail("CSV schema inference cancelled");
-    }
-    if (row.size() != inferred.size()) {
-      return fail("CSV row width differs from header");
     }
     for (std::size_t i = 0; i < row.size(); ++i) {
       bool compatible = double_compatible[i];
@@ -1389,7 +1424,8 @@ bool CsvReader::infer(std::vector<Column> &columns, Continue should_continue, vo
 
 bool CsvReader::start_scan(const std::string &expected_identity, std::size_t width,
                            const std::vector<std::string> &names,
-                           Continue should_continue, void *context)
+                           Continue should_continue, void *context,
+                           const std::vector<std::size_t> *parquet_projection)
 {
   error_.clear();
   data_offset_ = -1;
@@ -1414,7 +1450,9 @@ bool CsvReader::start_scan(const std::string &expected_identity, std::size_t wid
   if (format_ == Format::Parquet) {
     std::vector<Column> columns;
     return prepare_parquet(columns, should_continue, context)
-        && (columns.size() == width || fail("Parquet schema width changed"));
+        && (columns.size() == width || fail("Parquet schema width changed"))
+        && (parquet_projection == nullptr || parquet_->set_projection(*parquet_projection)
+            || fail(parquet_->error().c_str()));
   }
   if (format_ != Format::Csv) {
     return (width != 0 && names.size() == width) ? set_json_schema(names)
@@ -1428,11 +1466,17 @@ bool CsvReader::start_scan(const std::string &expected_identity, std::size_t wid
       && std::fseek(file_, 0, SEEK_SET) != 0) {
     return fail("cannot seek to CSV header");
   }
+  csv_record_ = 0;
+  csv_line_ = 1;
   Row header;
   const Result result = read_record(header);
+  csv_data_line_ = csv_line_;
   if (glob_member_ && result == Result::Eof) {
     data_offset_ = 0;
     return rescan();
+  }
+  if (result == Result::Error) {
+    return false;
   }
   if (result != Result::Row || (!glob_member_ && header.size() != width)) {
     return fail("CSV header changed since schema inference");
@@ -1469,6 +1513,8 @@ bool CsvReader::rescan()
     return fail("cannot seek to inferred file data");
   }
   array_state_ = ArrayState::Start;
+  csv_record_ = 1;
+  csv_line_ = csv_data_line_;
   return check_identity();
 }
 
@@ -1520,7 +1566,7 @@ bool CsvReader::next_batch(std::size_t max_rows, std::vector<Row> &rows,
       return fail("file scan cancelled");
     }
     const Result result = format_ != Format::Csv
-        ? read_json_row(row, should_continue, context) : read_record(row);
+        ? read_json_row(row, should_continue, context) : read_record(row, width_);
     if (result == Result::Eof) {
       break;
     }
