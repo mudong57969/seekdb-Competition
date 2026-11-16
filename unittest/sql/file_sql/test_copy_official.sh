@@ -112,7 +112,7 @@ for action in ('cancel', 'revoke'):
                 sql(f'KILL QUERY {sid}')
                 error = 'ERROR 1317'
             else:
-                sql("SET GLOBAL secure_file_priv='/'")
+                sql("SET GLOBAL secure_file_priv=''")
                 error = 'ERROR 1227'
             _, err = proc.communicate(timeout=15)
             assert proc.returncode and error in err and not output.exists(), err

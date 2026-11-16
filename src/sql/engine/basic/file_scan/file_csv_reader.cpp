@@ -79,11 +79,16 @@ int open_beneath(int root, const char *path, unsigned flags, unsigned resolve)
   return static_cast<int>(syscall(SYS_openat2, root, path, &options, sizeof(options)));
 }
 
+const char *relative_to_directory(const std::string &path, const std::string &directory)
+{
+  return path == directory ? "." : path.c_str() + (directory == "/" ? 1 : directory.size() + 1);
+}
+
 int open_allowed_directory(const std::string &directory)
 {
   const int root = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
-  if (root < 0) {
-    return -1;
+  if (root < 0 || directory == "/") {
+    return root;
   }
   const int allowed = open_beneath(root, directory.c_str() + 1, O_PATH | O_DIRECTORY, 0);
   close(root);
@@ -97,7 +102,7 @@ std::FILE *open_regular_file(const std::string &directory, const std::string &pa
     return nullptr;
   }
   // Pin the object before checking its type. O_PATH does not open a device or FIFO for I/O.
-  const int candidate = open_beneath(allowed, path.c_str() + directory.size() + 1,
+  const int candidate = open_beneath(allowed, relative_to_directory(path, directory),
                                      O_PATH, RESOLVE_NO_XDEV);
   close(allowed);
   if (candidate < 0) {
@@ -440,7 +445,7 @@ namespace
 {
 bool beneath_or_same(std::string_view path, std::string_view root)
 {
-  return !root.empty() && (path == root
+  return !root.empty() && (path == root || (root == "/" && !path.empty() && path.front() == '/')
       || (path.size() > root.size() && path.substr(0, root.size()) == root && path[root.size()] == '/'));
 }
 
@@ -467,7 +472,7 @@ CsvExport::~CsvExport()
 int CsvExport::open_parent(const std::string &allowed) const
 {
 #if defined(__linux__) && defined(SYS_openat2)
-  if (!safe_absolute_path(allowed) || !beneath_or_same(directory_, allowed)) {
+  if ((allowed != "/" && !safe_absolute_path(allowed)) || !beneath_or_same(directory_, allowed)) {
     errno = EACCES;
     return -1;
   }
@@ -475,7 +480,7 @@ int CsvExport::open_parent(const std::string &allowed) const
   if (root < 0) {
     return -1;
   }
-  const int dir = open_beneath(root, directory_ == allowed ? "." : directory_.c_str() + allowed.size() + 1,
+  const int dir = open_beneath(root, relative_to_directory(directory_, allowed),
                                O_PATH | O_DIRECTORY, RESOLVE_NO_XDEV);
   const int saved_error = errno;
   ::close(root);
@@ -496,7 +501,7 @@ int CsvExport::open(std::string allowed, const std::string &path,
   }
   trim_directory(allowed);
   const auto split = path.rfind('/');
-  directory_ = path.substr(0, split);
+  directory_ = path.substr(0, std::max<std::size_t>(1, split));
   name_ = path.substr(split + 1);
   if (name_.size() <= 4 || name_.compare(name_.size() - 4, 4, ".csv") != 0) {
     return EINVAL;
@@ -660,9 +665,8 @@ bool CsvReader::open(bool enabled, const std::string &directory, const std::stri
   while (allowed.size() > 1 && allowed.back() == '/') {
     allowed.pop_back();
   }
-  if (!safe_absolute_path(allowed) || !safe_absolute_path(path)
-      || path.size() <= allowed.size() || path.compare(0, allowed.size(), allowed) != 0
-      || path[allowed.size()] != '/') {
+  if ((allowed != "/" && !safe_absolute_path(allowed)) || !safe_absolute_path(path)
+      || path == allowed || !beneath_or_same(path, allowed)) {
     return fail("CSV path is outside the configured secure directory or is invalid");
   }
   const std::string_view filename = std::string_view(path).substr(path.rfind('/') + 1);
@@ -710,7 +714,7 @@ bool CsvReader::open_glob(const std::string &allowed, const std::string &path,
 {
 #if defined(__linux__) && defined(SYS_openat2)
   const std::size_t split = path.rfind('/');
-  const std::string directory = path.substr(0, split);
+  const std::string directory = path.substr(0, std::max<std::size_t>(1, split));
   if (directory.find_first_of("*?[]") != directory.npos) {
     return fail("glob metacharacters are only allowed in the final component");
   }
@@ -718,7 +722,7 @@ bool CsvReader::open_glob(const std::string &allowed, const std::string &path,
   if (root < 0) {
     return fail("cannot safely open glob root");
   }
-  const int fd = open_beneath(root, directory == allowed ? "." : directory.c_str() + allowed.size() + 1,
+  const int fd = open_beneath(root, relative_to_directory(directory, allowed),
                               O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV);
   ::close(root);
   if (fd < 0) {

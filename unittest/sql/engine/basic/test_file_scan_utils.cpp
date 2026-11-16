@@ -52,6 +52,24 @@ protected:
   fs::path directory;
 };
 
+TEST_F(CsvTest, RootSecureDirectoryAllowsReadGlobAndCopy)
+{
+  write("id\n1\n");
+  const auto input = directory / "input.csv";
+  const auto output = directory / "output.csv";
+  fs::create_symlink(input, directory / "link.csv");
+  CsvReader reader;
+  EXPECT_FALSE(reader.open(false, "/", input));
+  EXPECT_FALSE(reader.open(true, "", input));
+  EXPECT_FALSE(reader.open(true, "/", directory / "link.csv"));
+  EXPECT_FALSE(reader.open(true, "/", directory / "../input.csv"));
+  ASSERT_TRUE(reader.open(true, "/", input)) << reader.error();
+  fs::remove(directory / "link.csv");
+  ASSERT_TRUE(reader.open(true, "/", directory / "*", Format::Glob)) << reader.error();
+  CsvExport writer;
+  EXPECT_EQ(0, writer.open("/", output, {}));
+}
+
 TEST_F(CsvTest, InfersToEofAndRescans)
 {
   const std::string large(16000, 'x');

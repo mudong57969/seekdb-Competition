@@ -55,7 +55,7 @@ for action,expected in [('replace','file changed since schema inference'),('revo
     other.write_text('id\n2\n')
     other.replace(path)
    else:
-    sql("SET GLOBAL secure_file_priv='/'")
+    sql("SET GLOBAL secure_file_priv=''")
    sql("SET SESSION debug_sync='NOW SIGNAL "+release+"'")
    out,err=proc.communicate(timeout=20)
    assert proc.returncode and not out and expected in err,(proc.returncode,out,err)
