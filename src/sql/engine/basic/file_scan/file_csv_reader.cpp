@@ -95,6 +95,13 @@ int open_allowed_directory(const std::string &directory)
   return allowed;
 }
 
+// Root access spans the visible mount namespace. A named directory remains
+// confined to its mount so a nested bind mount cannot expose outside files.
+unsigned read_mount_flags(const std::string &directory)
+{
+  return directory == "/" ? 0 : RESOLVE_NO_XDEV;
+}
+
 std::FILE *open_regular_file(const std::string &directory, const std::string &path)
 {
   const int allowed = open_allowed_directory(directory);
@@ -103,7 +110,7 @@ std::FILE *open_regular_file(const std::string &directory, const std::string &pa
   }
   // Pin the object before checking its type. O_PATH does not open a device or FIFO for I/O.
   const int candidate = open_beneath(allowed, relative_to_directory(path, directory),
-                                     O_PATH, RESOLVE_NO_XDEV);
+                                     O_PATH, read_mount_flags(directory));
   close(allowed);
   if (candidate < 0) {
     return nullptr;
@@ -723,7 +730,7 @@ bool CsvReader::open_glob(const std::string &allowed, const std::string &path,
     return fail("cannot safely open glob root");
   }
   const int fd = open_beneath(root, relative_to_directory(directory, allowed),
-                              O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV);
+                              O_RDONLY | O_DIRECTORY, read_mount_flags(allowed));
   ::close(root);
   if (fd < 0) {
     return fail("cannot safely open glob directory");
