@@ -91,7 +91,9 @@ int open_allowed_directory(const std::string &directory)
     return root;
   }
   const int allowed = open_beneath(root, directory.c_str() + 1, O_PATH | O_DIRECTORY, 0);
+  const int saved_error = errno;
   close(root);
+  errno = saved_error;
   return allowed;
 }
 
@@ -482,17 +484,20 @@ CsvExport::~CsvExport()
 #endif
 }
 
-int CsvExport::open_parent(const std::string &allowed) const
+int CsvExport::open_parent(const std::string &allowed)
 {
 #if defined(__linux__) && defined(SYS_openat2)
+  diagnostic_step_ = "priv";
   if ((allowed != "/" && !safe_absolute_path(allowed)) || !beneath_or_same(directory_, allowed)) {
     errno = EACCES;
     return -1;
   }
+  diagnostic_step_ = "allowed_root";
   const int root = open_allowed_directory(allowed);
   if (root < 0) {
     return -1;
   }
+  diagnostic_step_ = "parent";
   const int dir = open_beneath(root, relative_to_directory(directory_, allowed),
                                O_PATH | O_DIRECTORY, RESOLVE_NO_XDEV);
   const int saved_error = errno;
@@ -509,6 +514,8 @@ int CsvExport::open(std::string allowed, const std::string &path,
                     const std::vector<std::string> &protected_directories)
 {
 #if defined(__linux__) && defined(SYS_openat2)
+  diagnostic_errno_ = 0;
+  diagnostic_step_ = "path";
   if (file_ != nullptr || parent_ >= 0 || !safe_absolute_path(path)) {
     return EACCES;
   }
@@ -519,12 +526,14 @@ int CsvExport::open(std::string allowed, const std::string &path,
   if (name_.size() <= 4 || name_.compare(name_.size() - 4, 4, ".csv") != 0) {
     return EINVAL;
   }
+  diagnostic_step_ = "system_dir";
   for (const auto root : {"/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc",
                           "/run", "/sbin", "/sys", "/usr", "/var/lib", "/var/log"}) {
     if (beneath_or_same(directory_, root)) {
       return EACCES;
     }
   }
+  diagnostic_step_ = "instance_dir";
   for (const auto &root : protected_directories) {
     if (root == "/" || beneath_or_same(directory_, root)) {
       return EACCES;
@@ -532,8 +541,10 @@ int CsvExport::open(std::string allowed, const std::string &path,
   }
   parent_ = open_parent(allowed);
   if (parent_ < 0) {
+    diagnostic_errno_ = errno;
     return EACCES;
   }
+  diagnostic_step_ = "target_stat";
   struct stat existing {};
   if (fstatat(parent_, name_.c_str(), &existing, AT_SYMLINK_NOFOLLOW) == 0) {
     return EEXIST;
@@ -541,10 +552,12 @@ int CsvExport::open(std::string allowed, const std::string &path,
   if (errno != ENOENT) {
     return errno;
   }
+  diagnostic_step_ = "tmpfile";
   const int fd = openat(parent_, ".", O_TMPFILE | O_WRONLY | O_CLOEXEC, 0600);
   if (fd < 0) {
     return errno;
   }
+  diagnostic_step_ = "fdopen";
   file_ = fdopen(fd, "wb");
   if (file_ == nullptr) {
     const int saved_error = errno;
@@ -603,15 +616,22 @@ int CsvExport::flush()
 int CsvExport::publish(std::string allowed)
 {
 #if defined(__linux__) && defined(SYS_openat2)
+  diagnostic_errno_ = 0;
   trim_directory(allowed);
   const int current = open_parent(allowed);
   if (current < 0) {
+    diagnostic_errno_ = errno;
     return EACCES;
   }
+  diagnostic_step_ = "parent_stat";
   struct stat original {}, now {};
   int result = EACCES;
-  if (fstat(parent_, &original) == 0 && fstat(current, &now) == 0
-      && original.st_dev == now.st_dev && original.st_ino == now.st_ino) {
+  if (fstat(parent_, &original) != 0 || fstat(current, &now) != 0) {
+    diagnostic_errno_ = errno;
+  } else if (original.st_dev != now.st_dev || original.st_ino != now.st_ino) {
+    diagnostic_step_ = "parent_changed";
+  } else {
+    diagnostic_step_ = "link";
     const std::string descriptor = "/proc/self/fd/" + std::to_string(fileno(file_));
     result = linkat(AT_FDCWD, descriptor.c_str(), current, name_.c_str(), AT_SYMLINK_FOLLOW) == 0 ? 0 : errno;
   }

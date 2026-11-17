@@ -75,9 +75,13 @@ public:
   int write_separator(char ch);
   int flush();
   int publish(std::string allowed);
+  const char *diagnostic_step() const { return diagnostic_step_; }
+  int diagnostic_errno() const { return diagnostic_errno_; }
 
 private:
-  int open_parent(const std::string &allowed) const;
+  int open_parent(const std::string &allowed);
+  const char *diagnostic_step_ = "unknown";
+  int diagnostic_errno_ = 0;
   std::FILE *file_ = nullptr;
   int parent_ = -1;
   std::string directory_;

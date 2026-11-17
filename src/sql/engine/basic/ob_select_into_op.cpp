@@ -195,13 +195,19 @@ int ObSelectIntoOp::calc_outfile_path()
 }
 namespace
 {
-int csv_copy_error(int error)
+int csv_copy_error(int error, const char *phase = "COPY_WRITE",
+                   const file_scan::CsvExport *writer = nullptr)
 {
   if (error == 0) {
     return OB_SUCCESS;
   }
   if (error == EACCES || error == EPERM) {
-    LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, "secure_file_priv");
+    const int raw = writer != nullptr && writer->diagnostic_errno() != 0 ? writer->diagnostic_errno() : error;
+    const char *name = raw == EXDEV ? "EXDEV" : raw == EACCES ? "EACCES" : raw == EPERM ? "EPERM" : "errno";
+    char privilege[128];
+    std::snprintf(privilege, sizeof(privilege), "secure_file_priv [%s/%s %s=%d]",
+                  phase, writer == nullptr ? "io" : writer->diagnostic_step(), name, raw);
+    LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, privilege);
     return OB_ERR_NO_PRIVILEGE;
   }
   if (error == EEXIST) {
@@ -269,7 +275,7 @@ int ObSelectIntoOp::copy_csv_rows()
     if (OB_SUCC(ret)) {
       const ObString path = file_name.get_string();
       ret = csv_copy_error(writer.open(std::string(allowed.ptr(), allowed.length()),
-                                      std::string(path.ptr(), path.length()), protected_directories));
+                                      std::string(path.ptr(), path.length()), protected_directories), "COPY_OPEN", &writer);
     }
   }
   if (OB_SUCC(ret) && header.is_true()) {
@@ -332,14 +338,14 @@ int ObSelectIntoOp::copy_csv_rows()
     ret = OB_SUCCESS;
   }
   if (OB_SUCC(ret)) {
-    OZ (csv_copy_error(writer.flush()));
+    OZ (csv_copy_error(writer.flush(), "COPY_FLUSH"));
     OZ (ctx_.check_status());
     OZ (session->get_file_sql_access(policy_allocator, enabled, allowed));
     if (OB_SUCC(ret) && !enabled) {
       ret = OB_NOT_SUPPORTED;
       LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL while enable_file_sql is OFF");
     }
-    OZ (csv_copy_error(writer.publish(std::string(allowed.ptr(), allowed.length()))));
+    OZ (csv_copy_error(writer.publish(std::string(allowed.ptr(), allowed.length())), "COPY_PUBLISH", &writer));
     if (OB_SUCC(ret)) {
       plan_ctx->set_affected_rows(row_count);
       ret = OB_ITER_END;
