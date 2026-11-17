@@ -97,6 +97,38 @@ int open_allowed_directory(const std::string &directory)
   return allowed;
 }
 
+const char *copy_mount_relation(int root, const char *relative_path, unsigned resolve)
+{
+#if defined(SYS_statx) && defined(STATX_MNT_ID)
+  // Compare the mounts pinned by these fds. A concurrent topology change
+  // can make this snapshot differ from the preceding failed lookup.
+  const int instance = open(".", O_PATH | O_DIRECTORY | O_CLOEXEC);
+  if (instance >= 0) {
+    const int target = open_beneath(root, relative_path, O_PATH | O_DIRECTORY, resolve);
+    const char *relation = "MOUNT_UNKNOWN";
+    if (target >= 0) {
+      struct statx instance_info {};
+      struct statx target_info {};
+      constexpr int flags = AT_EMPTY_PATH | AT_STATX_DONT_SYNC;
+      if (syscall(SYS_statx, instance, "", flags, STATX_MNT_ID, &instance_info) == 0
+          && syscall(SYS_statx, target, "", flags, STATX_MNT_ID, &target_info) == 0
+          && (instance_info.stx_mask & target_info.stx_mask & STATX_MNT_ID) != 0) {
+        relation = instance_info.stx_mnt_id == target_info.stx_mnt_id
+            ? "MOUNT_SAME" : "MOUNT_DIFFERENT";
+      }
+      close(target);
+    }
+    close(instance);
+    return relation;
+  }
+#else
+  (void)root;
+  (void)relative_path;
+  (void)resolve;
+#endif
+  return "MOUNT_UNKNOWN";
+}
+
 // Root access spans the visible mount namespace. A named directory remains
 // confined to its mount so a nested bind mount cannot expose outside files.
 unsigned read_mount_flags(const std::string &directory)
@@ -516,9 +548,12 @@ int CsvExport::open_parent(const std::string &allowed)
     return -1;
   }
   diagnostic_step_ = "parent";
-  const int dir = open_beneath(root, relative_to_directory(directory_, allowed),
-                               O_PATH | O_DIRECTORY, RESOLVE_NO_XDEV);
+  const char *relative_path = relative_to_directory(directory_, allowed);
+  const int dir = open_beneath(root, relative_path, O_PATH | O_DIRECTORY, RESOLVE_NO_XDEV);
   const int saved_error = errno;
+  if (dir < 0 && saved_error == EXDEV) {
+    diagnostic_mount_ = copy_mount_relation(root, relative_path, read_mount_flags(allowed));
+  }
   ::close(root);
   errno = saved_error;
   return dir;
@@ -534,6 +569,7 @@ int CsvExport::open(std::string allowed, const std::string &path,
 #if defined(__linux__) && defined(SYS_openat2)
   diagnostic_errno_ = 0;
   diagnostic_step_ = "path";
+  diagnostic_mount_ = "";
   if (file_ != nullptr || parent_ >= 0 || !safe_absolute_path(path)) {
     return EACCES;
   }

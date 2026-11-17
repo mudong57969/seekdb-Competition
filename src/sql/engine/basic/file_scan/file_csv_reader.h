@@ -77,11 +77,13 @@ public:
   int publish(std::string allowed);
   const char *diagnostic_step() const { return diagnostic_step_; }
   int diagnostic_errno() const { return diagnostic_errno_; }
+  const char *diagnostic_mount() const { return diagnostic_mount_; }
 
 private:
   int open_parent(const std::string &allowed);
   const char *diagnostic_step_ = "unknown";
   int diagnostic_errno_ = 0;
+  const char *diagnostic_mount_ = "";
   std::FILE *file_ = nullptr;
   int parent_ = -1;
   std::string directory_;

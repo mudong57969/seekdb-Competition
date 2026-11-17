@@ -205,8 +205,10 @@ int csv_copy_error(int error, const char *phase = "COPY_WRITE",
     const int raw = writer != nullptr && writer->diagnostic_errno() != 0 ? writer->diagnostic_errno() : error;
     const char *name = raw == EXDEV ? "EXDEV" : raw == EACCES ? "EACCES" : raw == EPERM ? "EPERM" : "errno";
     char privilege[128];
-    std::snprintf(privilege, sizeof(privilege), "secure_file_priv [%s/%s %s=%d]",
-                  phase, writer == nullptr ? "io" : writer->diagnostic_step(), name, raw);
+    const char *mount = writer == nullptr ? "" : writer->diagnostic_mount();
+    std::snprintf(privilege, sizeof(privilege), "secure_file_priv [%s/%s %s=%d]%s%s",
+                  phase, writer == nullptr ? "io" : writer->diagnostic_step(), name, raw,
+                  *mount == '\0' ? "" : " ", mount);
     LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, privilege);
     return OB_ERR_NO_PRIVILEGE;
   }
