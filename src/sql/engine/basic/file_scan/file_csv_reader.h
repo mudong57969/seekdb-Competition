@@ -112,6 +112,7 @@ public:
                   Continue should_continue = nullptr, void *context = nullptr);
   const std::string &identity() const { return identity_; }
   const std::string &error() const { return error_; }
+  std::string denial_detail(const char *phase) const;
 
 private:
   enum class Result { Row, Eof, Error };
@@ -139,7 +140,7 @@ private:
                        Continue should_continue, void *context);
   bool fail(const char *message);
   bool check_identity();
-  std::string current_identity() const;
+  std::string current_identity(int *failure_errno = nullptr) const;
   void close();
 
   enum class ArrayState { Start, First, AfterObject, Done };
@@ -166,6 +167,8 @@ private:
   std::size_t width_ = 0;
   std::string identity_;
   std::string error_;
+  const char *read_step_ = "path";
+  int read_errno_ = 0;
 };
 
 } // namespace oceanbase::sql::file_scan

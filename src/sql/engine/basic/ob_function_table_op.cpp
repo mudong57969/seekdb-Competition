@@ -85,7 +85,7 @@ int ObFunctionTableOp::open_csv()
           &ctx_)) {
       if (OB_SUCC(ret = ctx_.check_status())) {
         ret = OB_ERR_NO_PRIVILEGE;
-        LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, "secure_file_priv");
+        LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, csv_->reader_.denial_detail("READ_EXEC").c_str());
       }
     } else if (!csv_->reader_.start_scan(identity, MY_SPEC.file_width_, names,
           [](void *context) { return OB_SUCCESS == static_cast<ObExecContext *>(context)->check_status(); },

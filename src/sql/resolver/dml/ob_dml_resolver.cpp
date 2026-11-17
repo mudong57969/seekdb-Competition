@@ -4001,7 +4001,7 @@ int ObDMLResolver::resolve_read_csv_table(const ParseNode &node, const ParseNode
           exec_ctx)) {
       if (OB_SUCC(ret = exec_ctx->check_status())) {
         ret = OB_ERR_NO_PRIVILEGE;
-        LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, "secure_file_priv");
+        LOG_USER_ERROR(OB_ERR_NO_PRIVILEGE, reader.denial_detail("READ_BIND").c_str());
       }
     } else if (!reader.infer(columns, [](void *context) {
                  return OB_SUCCESS == static_cast<ObExecContext *>(context)->check_status();

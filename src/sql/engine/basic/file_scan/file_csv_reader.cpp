@@ -104,28 +104,46 @@ unsigned read_mount_flags(const std::string &directory)
   return directory == "/" ? 0 : RESOLVE_NO_XDEV;
 }
 
-std::FILE *open_regular_file(const std::string &directory, const std::string &path)
+std::FILE *open_regular_file(const std::string &directory, const std::string &path,
+                             const char *&step, int &failure_errno)
 {
   const int allowed = open_allowed_directory(directory);
   if (allowed < 0) {
+    failure_errno = errno;
+    step = "allowed_root";
     return nullptr;
   }
   // Pin the object before checking its type. O_PATH does not open a device or FIFO for I/O.
   const int candidate = open_beneath(allowed, relative_to_directory(path, directory),
                                      O_PATH, read_mount_flags(directory));
+  if (candidate < 0) {
+    failure_errno = errno;
+    step = "openat2";
+  }
   close(allowed);
   if (candidate < 0) {
     return nullptr;
   }
   struct stat status {};
   int readable = -1;
-  if (fstat(candidate, &status) == 0 && S_ISREG(status.st_mode)) {
+  if (fstat(candidate, &status) != 0) {
+    failure_errno = errno;
+    step = "type_stat";
+  } else if (!S_ISREG(status.st_mode)) {
+    step = "type";
+  } else {
     const std::string descriptor = "/proc/self/fd/" + std::to_string(candidate);
     readable = open(descriptor.c_str(), O_RDONLY | O_CLOEXEC);
+    if (readable < 0) {
+      failure_errno = errno;
+      step = "reopen";
+    }
   }
   close(candidate);
   std::FILE *file = readable < 0 ? nullptr : fdopen(readable, "rb");
   if (file == nullptr && readable >= 0) {
+    failure_errno = errno;
+    step = "fdopen";
     close(readable);
   }
   return file;
@@ -680,16 +698,29 @@ bool CsvReader::fail(const char *message)
   return false;
 }
 
+std::string CsvReader::denial_detail(const char *phase) const
+{
+  const char *name = read_errno_ == EXDEV ? "EXDEV" : read_errno_ == EACCES ? "EACCES"
+      : read_errno_ == EPERM ? "EPERM" : read_errno_ == ENOENT ? "ENOENT"
+      : read_errno_ == ELOOP ? "ELOOP" : read_errno_ == ENOSYS ? "ENOSYS" : "errno";
+  return std::string("secure_file_priv [") + phase + "/" + read_step_
+      + (read_errno_ == 0 ? " no_errno]" : std::string(" ") + name + "=" + std::to_string(read_errno_) + "]");
+}
+
 bool CsvReader::open(bool enabled, const std::string &directory, const std::string &path, Format format,
                      Continue should_continue, void *context)
 {
   close();
   format_ = format;
   error_.clear();
+  read_step_ = "path";
+  read_errno_ = 0;
   if (should_continue != nullptr && !should_continue(context)) {
+    read_step_ = "cancelled";
     return fail("file open cancelled");
   }
   if (!enabled) {
+    read_step_ = "disabled";
     return fail("file SQL is disabled");
   }
 #if defined(__linux__) && defined(SYS_openat2)
@@ -700,9 +731,11 @@ bool CsvReader::open(bool enabled, const std::string &directory, const std::stri
   }
   if ((allowed != "/" && !safe_absolute_path(allowed)) || !safe_absolute_path(path)
       || path == allowed || !beneath_or_same(path, allowed)) {
+    read_step_ = "priv";
     return fail("CSV path is outside the configured secure directory or is invalid");
   }
   const std::string_view filename = std::string_view(path).substr(path.rfind('/') + 1);
+  read_step_ = "pattern";
   if (format == Format::Glob) {
     return filename == "*" ? open_glob(allowed, path, should_continue, context)
                            : fail("glob() requires a final * component");
@@ -718,6 +751,7 @@ bool CsvReader::open(bool enabled, const std::string &directory, const std::stri
   (void)path;
   (void)should_continue;
   (void)context;
+  read_step_ = "platform";
   return fail("secure file opening requires Linux openat2");
 #endif
 }
@@ -725,12 +759,13 @@ bool CsvReader::open(bool enabled, const std::string &directory, const std::stri
 bool CsvReader::open_single(const std::string &allowed, const std::string &path)
 {
 #if defined(__linux__) && defined(SYS_openat2)
-  file_ = open_regular_file(allowed, path);
+  file_ = open_regular_file(allowed, path, read_step_, read_errno_);
   if (file_ == nullptr) {
     return fail("cannot safely open CSV as a regular file");
   }
-  identity_ = current_identity();
+  identity_ = current_identity(&read_errno_);
   if (identity_.empty()) {
+    read_step_ = "identity";
     close();
     return fail("cannot determine CSV file identity");
   }
@@ -753,16 +788,23 @@ bool CsvReader::open_glob(const std::string &allowed, const std::string &path,
   }
   const int root = open_allowed_directory(allowed);
   if (root < 0) {
+    read_errno_ = errno;
+    read_step_ = "allowed_root";
     return fail("cannot safely open glob root");
   }
   const int fd = open_beneath(root, relative_to_directory(directory, allowed),
                               O_RDONLY | O_DIRECTORY, read_mount_flags(allowed));
+  const int open_error = fd < 0 ? errno : 0;
   ::close(root);
   if (fd < 0) {
+    read_errno_ = open_error;
+    read_step_ = "openat2";
     return fail("cannot safely open glob directory");
   }
   DIR *entries = fdopendir(fd);
   if (entries == nullptr) {
+    read_errno_ = errno;
+    read_step_ = "enumerate";
     ::close(fd);
     return fail("cannot enumerate glob directory");
   }
@@ -777,7 +819,11 @@ bool CsvReader::open_glob(const std::string &allowed, const std::string &path,
     errno = 0;
     const dirent *entry = readdir(entries);
     if (entry == nullptr) {
-      ok = errno == 0 || fail("glob directory read failed");
+      if (errno != 0) {
+        read_errno_ = errno;
+        read_step_ = "enumerate";
+        ok = fail("glob directory read failed");
+      }
       break;
     }
     const std::string_view name(entry->d_name);
@@ -955,11 +1001,15 @@ bool CsvReader::next_glob_batch(std::size_t max_rows, std::vector<Row> &rows,
   return true;
 }
 
-std::string CsvReader::current_identity() const
+std::string CsvReader::current_identity(int *failure_errno) const
 {
 #if defined(__linux__)
   struct stat status {};
-  if (file_ != nullptr && fstat(fileno(file_), &status) == 0) {
+  const int stat_result = file_ == nullptr ? -1 : fstat(fileno(file_), &status);
+  if (failure_errno != nullptr && file_ != nullptr && stat_result != 0) {
+    *failure_errno = errno;
+  }
+  if (file_ != nullptr && stat_result == 0) {
     const std::string_view prefix = format_ == Format::Parquet ? PARQUET_IDENTITY_PREFIX
         : format_ == Format::Json ? JSON_IDENTITY_PREFIX
         : format_ == Format::Ndjson ? NDJSON_IDENTITY_PREFIX : std::string_view{};
@@ -969,6 +1019,8 @@ std::string CsvReader::current_identity() const
         + std::to_string(status.st_mtim.tv_nsec) + ":" + std::to_string(status.st_ctim.tv_sec) + ":"
         + std::to_string(status.st_ctim.tv_nsec);
   }
+#else
+  (void)failure_errno;
 #endif
   return {};
 }
